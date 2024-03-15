@@ -1,0 +1,12 @@
+array_width                  = 95
+attr_fn_like_width           = 95
+chain_width                  = 95
+comment_width                = 120
+doc_comment_code_block_width = 95
+edition                      = "2021"
+format_code_in_doc_comments  = true
+max_width                    = 120
+merge_imports                = true
+reorder_imports              = true
+use_small_heuristics         = "Max"
+wrap_comments                = true
