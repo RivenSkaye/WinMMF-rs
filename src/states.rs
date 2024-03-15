@@ -52,11 +52,7 @@ impl<'a> RWLock<'a> {
         if pointer.is_null() {
             panic!("Never, ever pass a null pointer into a lock!")
         }
-        Self {
-            chunk: AtomicU32::from_ptr(pointer.cast()),
-            load_order: Ordering::SeqCst,
-            store_order: Ordering::SeqCst,
-        }
+        Self { chunk: AtomicU32::from_ptr(pointer.cast()), load_order: Ordering::SeqCst, store_order: Ordering::SeqCst }
     }
 
     /// Similar to [`Self::from_existing`], except it clears all state and ensures [`Self::initialized`] returns false.
@@ -121,10 +117,7 @@ impl<'a> RWLock<'a> {
     /// unsafe internally, but if care is not taken it might cause concurrent writes or allow readers while a write is
     /// in progress due to resetting lock state!
     pub unsafe fn set_init(&self) {
-        self.chunk.store(
-            self.chunk.load(Ordering::SeqCst) & (u8::MAX as u32),
-            Ordering::SeqCst,
-        )
+        self.chunk.store(self.chunk.load(Ordering::SeqCst) & (u8::MAX as u32), Ordering::SeqCst)
     }
 
     /// Thin wrapper around [`Self::set_init`] that returns self for chaining calls.
@@ -188,8 +181,8 @@ impl<'a> RWLock<'a> {
         }
     }
 
-    /// Clear the write lock. As writing isn't allowed while any other lock is being held, this will just nuke all locks
-    /// if a write lock is held already.
+    /// Nuke all existing write locks as there can only be one, legally.
+    /// Note that this should probably not be considered safe to use with multiple writers.
     pub fn unlock_write(&self) {
         let mut bytes = self.split_lock();
         if bytes.1 != 0 {
@@ -201,20 +194,12 @@ impl<'a> RWLock<'a> {
     #[inline(always)]
     fn split_lock(&self) -> (u8, u8, u8, u8) {
         let lock = self.chunk.load(Ordering::SeqCst);
-        (
-            (lock >> 24) as u8,
-            (lock >> 16) as u8,
-            (lock >> 8) as u8,
-            lock as u8,
-        )
+        ((lock >> 24) as u8, (lock >> 16) as u8, (lock >> 8) as u8, lock as u8)
     }
 
     #[inline(always)]
     fn merge_lock(&self, bytes: (u8, u8, u8, u8)) {
-        let lock = (bytes.0 as u32) << 24
-            & (bytes.1 as u32) << 16
-            & (bytes.2 as u32) << 8
-            & bytes.3 as u32;
+        let lock = (bytes.0 as u32) << 24 & (bytes.1 as u32) << 16 & (bytes.2 as u32) << 8 & bytes.3 as u32;
         self.chunk.store(lock, Ordering::SeqCst)
     }
 }
