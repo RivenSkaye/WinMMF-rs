@@ -13,12 +13,10 @@ use windows::{
     },
 };
 
-#[allow(dead_code)]
 pub const LOCAL_NAMESPACE: ztr32 = ztr32::const_make("Local\\");
-#[allow(dead_code)]
 pub const GLOBAL_NAMESPACE: ztr32 = ztr32::const_make("Global\\");
-#[allow(dead_code)]
 
+#[repr(u8)]
 pub enum Namespace {
     LOCAL,
     GLOBAL,
@@ -39,7 +37,7 @@ macro_rules! wrap_try {
     ($func:expr) => {{
         let mut res: Result<_, WErr> = Err(WErr::empty());
         if let Err(e) = try_seh(|| res = $func) {
-            return Err(WErr::from_hresult(HRESULT(e.code() as u32 as i32).into()));
+            return Err(WErr::new(HRESULT(e.code() as i32).into(), e.to_string()));
         }
         res?
     }};
@@ -60,7 +58,6 @@ const WIN_OK: WErr = WErr::empty();
 /// only support 64-bit, but knowing the edge cases with Windows in environments where this can pop up, that will
 /// probably end up being a footgun for myself. Will look into doing something with usize maybe. Though do people need
 /// 2^64 bytes worth of data for a single MMF? At that point, why not open another instead?
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct MemoryMappedFile<'a> {
     /// The [`HANDLE`] to the created mapping
@@ -70,8 +67,10 @@ pub struct MemoryMappedFile<'a> {
     /// The higher order bits for the size of the opened file.
     /// Always 0 for now, but this might change if a use case exists for more than 2^32 bytes allocated and mapped into
     /// memory at the same time.
+    #[allow(dead_code)]
     size_high_order: u32,
     /// The lower order bits for the size of the opened file.
+    #[allow(dead_code)]
     size_low_order: u32,
     /// The total size, should be the same as [`Self::size_low_order`].
     /// Might change in a future version if I can be arsed to write pointer-sized code
@@ -102,7 +101,6 @@ impl<'a> MemoryMappedFile<'a> {
     /// will make a large part of the file inaccessible to other code trying to read it from a 32-bit process.
     /// The total size allocated will be 4 bytes larger than the specified size, but only after checking the input size
     /// is non-zero.
-    #[allow(dead_code)]
     pub fn new(size: NonZeroU32, name: &str, namespace: Namespace) -> Result<Self, WErr> {
         // Build the name to use for the MMF
         let init_name = match namespace {
@@ -156,7 +154,6 @@ impl<'a> MemoryMappedFile<'a> {
         })
     }
 
-    #[allow(dead_code)]
     pub fn open(size: NonZeroU32, name: &str, namespace: Namespace) -> Result<Self, WErr> {
         // Build the name to use for the MMF
         let init_name = match namespace {
@@ -209,6 +206,7 @@ impl<'a> MemoryMappedFile<'a> {
     pub fn fullname(&self) -> String {
         self.name.to_string()
     }
+
     pub fn close(&self) -> Result<(), WErr> {
         match wrap_try!(unsafe { Ok(CloseHandle(self.handle)) }) {
             Err(WIN_OK) | Ok(_) => Ok(()),
