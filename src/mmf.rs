@@ -7,8 +7,8 @@ use windows::{
     Win32::{
         Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE},
         System::Memory::{
-            CreateFileMappingA, MapViewOfFile, OpenFileMappingA, UnmapViewOfFile,
-            FILE_MAP_ALL_ACCESS, MEMORY_MAPPED_VIEW_ADDRESS, PAGE_READWRITE,
+            CreateFileMappingA, MapViewOfFile, OpenFileMappingA, UnmapViewOfFile, FILE_MAP_ALL_ACCESS,
+            MEMORY_MAPPED_VIEW_ADDRESS, PAGE_READWRITE,
         },
     },
 };
@@ -112,27 +112,13 @@ impl<'a> MemoryMappedFile<'a> {
         let mmf_name = PCSTR::from_raw(init_name.to_ptr());
         // Acquire a handle and exit if we snag an error
         let handle = wrap_try!(unsafe {
-            CreateFileMappingA(
-                INVALID_HANDLE_VALUE,
-                None,
-                PAGE_READWRITE,
-                0,
-                size.get() + 4,
-                mmf_name,
-            )
+            CreateFileMappingA(INVALID_HANDLE_VALUE, None, PAGE_READWRITE, 0, size.get() + 4, mmf_name)
         });
 
         // Unsafe because `MapViewOfFile` is marked as such, but it should return a NULL pointer when failing; and set
         // the last error state correspondingly.
-        let map_view = wrap_try!(unsafe {
-            Ok(MapViewOfFile(
-                handle,
-                FILE_MAP_ALL_ACCESS,
-                0,
-                0,
-                size.get() as usize + 4,
-            ))
-        });
+        let map_view =
+            wrap_try!(unsafe { Ok(MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size.get() as usize + 4,)) });
 
         // Waste some time to ensure the memory is zeroed out - I learned the importance of this the hard way.
         let mut zeroing = Vec::with_capacity(size.get() as usize + 4);
@@ -166,15 +152,8 @@ impl<'a> MemoryMappedFile<'a> {
         let handle = wrap_try!(unsafe { OpenFileMappingA(FILE_MAP_ALL_ACCESS.0, false, mmf_name) });
         // Unsafe because `MapViewOfFile` is marked as such, but it should return a NULL pointer when failing; and set
         // the last error state correspondingly.
-        let map_view = wrap_try!(unsafe {
-            Ok(MapViewOfFile(
-                handle,
-                FILE_MAP_ALL_ACCESS,
-                0,
-                0,
-                size.get() as usize + 4,
-            ))
-        });
+        let map_view =
+            wrap_try!(unsafe { Ok(MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size.get() as usize + 4,)) });
         let lock = unsafe { RWLock::from_existing(map_view.Value.cast()) };
         let write_ptr = unsafe { map_view.Value.cast::<u8>().add(4) };
         Ok(Self {
@@ -196,10 +175,7 @@ impl<'a> MemoryMappedFile<'a> {
 
     #[allow(dead_code)]
     pub fn filename(&self) -> String {
-        self.name
-            .split_once('\\')
-            .map(|s| s.1.to_owned())
-            .unwrap_or(self.name.to_string())
+        self.name.split_once('\\').map(|s| s.1.to_owned()).unwrap_or(self.name.to_string())
     }
 
     #[allow(dead_code)]
@@ -210,13 +186,7 @@ impl<'a> MemoryMappedFile<'a> {
     pub fn close(&self) -> Result<(), WErr> {
         match wrap_try!(unsafe { Ok(CloseHandle(self.handle)) }) {
             Err(WIN_OK) | Ok(_) => Ok(()),
-            err => err.inspect_err(|e| {
-                eprintln!(
-                    "Error closing MMF's handle ({}): {:#?}",
-                    e.code(),
-                    e.message()
-                )
-            }),
+            err => err.inspect_err(|e| eprintln!("Error closing MMF's handle ({}): {:#?}", e.code(), e.message())),
         }
     }
 }
@@ -243,11 +213,7 @@ impl<'a> Mmf for MemoryMappedFile<'a> {
     /// See the documentation for [Self::read()], except this takes a buffer to write to.
     /// If the buffer is smaller than the MMF, data will be truncated.
     fn read_to_buf(&self, buffer: &mut Vec<u8>, count: usize) -> Result<(), WErr> {
-        let to_read = if count == 0 {
-            buffer.capacity().min(self.size as usize)
-        } else {
-            count
-        };
+        let to_read = if count == 0 { buffer.capacity().min(self.size as usize) } else { count };
         if let Some(_) = &self.map_view {
             if !self.lock.initialized() {
                 return Err(WErr::new(HRESULT(9).into(), "File is uninitialized!"));
@@ -256,10 +222,7 @@ impl<'a> Mmf for MemoryMappedFile<'a> {
                 return Err(WErr::new(HRESULT(19).into(), "File is writelocked!"));
             }
             if let Err(_) = self.lock.lock_read() {
-                return Err(WErr::new(
-                    HRESULT(19).into(),
-                    "The lock has hit the maximum amount of readers!",
-                ));
+                return Err(WErr::new(HRESULT(19).into(), "The lock has hit the maximum amount of readers!"));
             }
             // safety: the buffer is allocated elsewhere, so we know the memory doesn't overlap. With the size check, we
             // also ensure we don't copy more bytes than what fits
@@ -270,10 +233,7 @@ impl<'a> Mmf for MemoryMappedFile<'a> {
             self.lock.unlock_read().unwrap();
             Ok(())
         } else {
-            Err(WErr::new(
-                HRESULT(2).into(),
-                "No memory mapped file has been opened yet!",
-            ))
+            Err(WErr::new(HRESULT(2).into(), "No memory mapped file has been opened yet!"))
         }
     }
 
@@ -309,10 +269,7 @@ impl<'a> Mmf for MemoryMappedFile<'a> {
             unsafe { src_ptr.copy_to(self.write_ptr, cap) };
             Ok(self.lock.unlock_write())
         } else {
-            Err(WErr::new(
-                HRESULT(9).into(),
-                "No memory mapped file has been opened yet!",
-            ))
+            Err(WErr::new(HRESULT(9).into(), "No memory mapped file has been opened yet!"))
         }
     }
 }
@@ -332,13 +289,9 @@ impl MemoryMappedView {
     fn unmap(&self) -> Result<(), WErr> {
         match wrap_try!(unsafe { Ok(UnmapViewOfFile(self.address)) }) {
             Err(WIN_OK) | Ok(_) => Ok(()),
-            err => err.inspect_err(|e| {
-                eprintln!(
-                    "Error unmapping the view of the MMF ({}): {:#?}",
-                    e.code(),
-                    e.message()
-                )
-            }),
+            err => {
+                err.inspect_err(|e| eprintln!("Error unmapping the view of the MMF ({}): {:#?}", e.code(), e.message()))
+            }
         }
     }
 }
