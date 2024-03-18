@@ -1,4 +1,5 @@
 [package]
+    authors = ["Riven Skaye <riven@tae.moe>"]
     edition = "2021"
     license = "MIT OR Apache-2.0"
     name    = "winmmf"
