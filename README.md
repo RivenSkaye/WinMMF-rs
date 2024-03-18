@@ -15,3 +15,11 @@ This crate only supports Windows. Nothing else uses this mechanic for shared mem
 | ARM          | Windows | Maybe?    | Have not tested this, nor do I have a system to test with |
 | lolwut?      | ?????   | No        | What other architectures does Windows even run on?        |
 | *            | *NIX    | lolnope   | No Kernel/OS support for these functions, try wine :joy:  |
+
+## Goals
+
+Honestly, I just want a working method of multiplexing a camera feed to a couple applications at the same time. And the biggest issues there are exclusive access and camera startup time and playback delay. But yeah, the goal is to make a stable MMF wrapper that handles the headache of the OS API surrounding it.
+
+## License
+
+This crate is brought to you under shared MIT or Apache 2.0 licensing, at your option. Contributions made will share this licensing unless explicitly stated otherwise. When stating other licensing on your work, please ensure it's compatible with the existing licenses. License texts can be found in the [MIT License](./LICENSE_MIT) and the [Apache 2.0 license](./LICENSE-APACHE) files.
