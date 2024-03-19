@@ -29,7 +29,7 @@ pub enum Namespace {
 pub trait Mmf {
     fn read(&self, count: usize) -> MMFResult<Vec<u8>>;
     fn read_to_buf(&self, buffer: &mut Vec<u8>, count: usize) -> MMFResult<()>;
-    fn write(&self, buffer: &[u8]) -> Result<(), WErr>;
+    fn write(&self, buffer: &[u8]) -> MMFResult<()>;
 }
 
 /// Replace the boilerplate for every time we need to call `try_seh`.
@@ -248,20 +248,23 @@ impl<'a> Mmf for MemoryMappedFile<'a> {
     /// - 5: Access denied; the lock could not be acquired.
     /// - 9: Invalid block; the lock is telling us this data has not yet been initialized.
     /// - All errors from [Self::read()] as a read is required to update the lock.
-    fn write(&self, buffer: &[u8]) -> Result<(), WErr> {
+    fn write(&self, buffer: &[u8]) -> MMFResult<()> {
         let cap = buffer.len().min(self.size as usize);
         if cap < buffer.len() {
-            return Err(WErr::new(HRESULT(19).into(), "Buffer too large!"));
+            return Err(MMFError::NotEnoughMemory);
         }
         if !self.lock.initialized() {
-            return Err(WErr::new(HRESULT(9).into(), "File is uninitialized!"));
+            return Err(MMFError::Uninitialized);
         }
-        if self.lock.locked() {
-            return Err(WErr::new(HRESULT(5).into(), "File is locked elsewhere!"));
+        if self.lock.readlocked() {
+            return Err(MMFError::ReadLocked);
+        }
+        if self.lock.writelocked() {
+            return Err(MMFError::WriteLocked);
         }
         if let Some(_) = &self.map_view {
             if let Err(_) = self.lock.lock_write() {
-                return Err(WErr::new(HRESULT(5).into(), "Lock could not be acquired!"));
+                return Err(MMFError::LockViolation);
             }
             let src_ptr = buffer.as_ptr();
             // We ensured this size is correct and filled out when instantiating the MMF, this is just writing the same
@@ -269,7 +272,7 @@ impl<'a> Mmf for MemoryMappedFile<'a> {
             unsafe { src_ptr.copy_to(self.write_ptr, cap) };
             Ok(self.lock.unlock_write())
         } else {
-            Err(WErr::new(HRESULT(9).into(), "No memory mapped file has been opened yet!"))
+            Err(MMFError::Uninitialized)
         }
     }
 }
