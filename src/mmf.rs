@@ -6,9 +6,9 @@ use fixedstr::{ztr32, ztr64};
 use microseh::try_seh;
 use std::num::NonZeroU32;
 use windows::{
-    core::{Error as WErr, Result as WRes, HRESULT, PCSTR},
+    core::{Error as WErr, PCSTR},
     Win32::{
-        Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE},
+        Foundation::{CloseHandle, SetLastError, HANDLE, INVALID_HANDLE_VALUE, WIN32_ERROR},
         System::Memory::{
             CreateFileMappingA, MapViewOfFile, OpenFileMappingA, UnmapViewOfFile, FILE_MAP_ALL_ACCESS,
             MEMORY_MAPPED_VIEW_ADDRESS, PAGE_READWRITE,
@@ -38,10 +38,11 @@ pub trait Mmf {
 /// based on the fact that most `windows-rs` calls return results, so it's generally less effort this way.
 macro_rules! wrap_try {
     ($func:expr, $res:ident) => {{
-        let mut $res: WRes<_> = Err(WErr::empty());
+        let mut $res: Result<_, _> = Err(WErr::empty());
         let res2 = try_seh(|| $res = $func);
         if let Err(e) = res2 {
-            return Err(WErr::new(HRESULT(e.code() as i32).into(), e.to_string()).into());
+            unsafe { SetLastError(WIN32_ERROR(e.code() as i32 as u32)) };
+            return Err(WErr::from_win32().into());
         }
         $res.map_err(MMFError::from)
     }};
@@ -200,8 +201,7 @@ impl<'a> Mmf for MemoryMappedFile<'a> {
     /// correct. This is an unfortunate side effect of having to work with raw pointers and bytes in memory.
     /// Assuming nothing external has touched the memory region other than this class, it _should_ be valid data unless
     /// it's marked as uninitialized.
-    /// The errors returned from this function can be retrieved by calling [`WErr::code()`] and those are repurposed as
-    /// follows:
+    /// These errors use the most similar error codes from the system API:
     /// - 2: File not found; the MMF isn't opened yet or no map view exists.
     /// - 9: Invalid block; the lock is telling us this data has not yet been initialized.
     /// - 19: Write Protected; the file has a write lock on it which means reading might return incomplete data, or the
