@@ -4,17 +4,18 @@ use super::{
 };
 use fixedstr::{ztr32, ztr64};
 use microseh::try_seh;
-use std::num::NonZeroU32;
+use std::num::NonZeroUsize;
 use windows::{
     core::{Error as WErr, PCSTR},
     Win32::{
-        Foundation::{CloseHandle, SetLastError, HANDLE, INVALID_HANDLE_VALUE, WIN32_ERROR},
+        Foundation::{CloseHandle, GetLastError, SetLastError, HANDLE, INVALID_HANDLE_VALUE, WIN32_ERROR},
         System::Memory::{
             CreateFileMappingA, MapViewOfFile, OpenFileMappingA, UnmapViewOfFile, FILE_MAP_ALL_ACCESS,
             MEMORY_MAPPED_VIEW_ADDRESS, PAGE_READWRITE,
         },
     },
 };
+use windows_ext::ext::QWordExt;
 
 pub const LOCAL_NAMESPACE: ztr32 = ztr32::const_make("Local\\");
 pub const GLOBAL_NAMESPACE: ztr32 = ztr32::const_make("Global\\");
@@ -41,7 +42,8 @@ macro_rules! wrap_try {
         let mut $res: Result<_, _> = Err(WErr::empty());
         let res2 = try_seh(|| $res = $func);
         if let Err(e) = res2 {
-            unsafe { SetLastError(WIN32_ERROR(e.code() as i32 as u32)) };
+            // make sure the error code is set system-side
+            unsafe { SetLastError(WIN32_ERROR(e.code() as u32)) };
             return Err(WErr::from_win32().into());
         }
         $res.map_err(MMFError::from)
@@ -76,7 +78,7 @@ pub struct MemoryMappedFile<'a> {
     size_low_order: u32,
     /// The total size, should be the same as [`Self::size_low_order`].
     /// Might change in a future version if I can be arsed to write pointer-sized code
-    size: u32,
+    size: usize,
     /// The lock. ~~3 pointers to their own bytes~~
     lock: RWLock<'a>,
     /// The original MemoryMappedView; We need to keep this around for unmapping it.
@@ -98,12 +100,11 @@ impl<'a> MemoryMappedFile<'a> {
     /// UB, the heat death of the universe, panics or errors or a change in the answer to a value other than 42. you're
     /// on your own.
     ///
-    /// The size MUST be a non-zero value; allocating zero bytes errors on the OS end of things. The choice for a u32
-    /// was made to guarantee compatibility with 32-bit systems AND 32-bit compiled applications. Allocating too much
+    /// The size MUST be a non-zero value; allocating zero bytes errors on the OS end of things. Allocating too much
     /// will make a large part of the file inaccessible to other code trying to read it from a 32-bit process.
     /// The total size allocated will be 4 bytes larger than the specified size, but only after checking the input size
     /// is non-zero.
-    pub fn new(size: NonZeroU32, name: &str, namespace: Namespace) -> MMFResult<Self> {
+    pub fn new(size: NonZeroUsize, name: &str, namespace: Namespace) -> MMFResult<Self> {
         // Build the name to use for the MMF
         let init_name = match namespace {
             Namespace::GLOBAL => ztr64::make(&format!("{GLOBAL_NAMESPACE}{name}")),
@@ -112,9 +113,11 @@ impl<'a> MemoryMappedFile<'a> {
         };
         // fuckin' windows
         let mmf_name = PCSTR::from_raw(init_name.to_ptr());
-        // Acquire a handle and exit if we snag an error
+        let (dw_low, dw_high) = (size.get() + 4).split();
+        // Acquire a handle and exit if we snag an error.
+        // Safety: handled through microSEH
         let handle = wrap_try!(
-            unsafe { CreateFileMappingA(INVALID_HANDLE_VALUE, None, PAGE_READWRITE, 0, size.get() + 4, mmf_name) },
+            unsafe { CreateFileMappingA(INVALID_HANDLE_VALUE, None, PAGE_READWRITE, dw_high, dw_low, mmf_name) },
             hndl
         )?;
         // Unsafe because `MapViewOfFile` is marked as such, but it should return a NULL pointer when failing; and set
@@ -123,7 +126,9 @@ impl<'a> MemoryMappedFile<'a> {
             unsafe { Ok(MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size.get() as usize + 4)) },
             mapview
         )?;
-
+        if unsafe { GetLastError() }.is_err() {
+            return Err(WErr::from_win32().into());
+        }
         // Waste some time to ensure the memory is zeroed out - I learned the importance of this the hard way.
         let mut zeroing = Vec::with_capacity(size.get() as usize + 4);
         zeroing.resize(size.get() as usize + 4, 0);
@@ -135,8 +140,8 @@ impl<'a> MemoryMappedFile<'a> {
         Ok(Self {
             handle,
             name: init_name,
-            size_high_order: 0,
-            size_low_order: size.get(),
+            size_high_order: dw_high,
+            size_low_order: dw_low,
             size: size.get(),
             lock,
             map_view: Some(map_view.into()),
@@ -144,7 +149,7 @@ impl<'a> MemoryMappedFile<'a> {
         })
     }
 
-    pub fn open(size: NonZeroU32, name: &str, namespace: Namespace) -> MMFResult<Self> {
+    pub fn open(size: NonZeroUsize, name: &str, namespace: Namespace) -> MMFResult<Self> {
         // Build the name to use for the MMF
         let init_name = match namespace {
             Namespace::GLOBAL => ztr64::make(&format!("{GLOBAL_NAMESPACE}{name}")),
@@ -153,18 +158,23 @@ impl<'a> MemoryMappedFile<'a> {
         };
         // fuckin' windows
         let mmf_name = PCSTR::from_raw(init_name.to_ptr());
+        let (dw_low, dw_high) = (size.get() + 4).split();
+        // Acquire a handle and exit if we snag an error
         let handle = wrap_try!(unsafe { OpenFileMappingA(FILE_MAP_ALL_ACCESS.0, false, mmf_name) }, hndl)?;
         // Unsafe because `MapViewOfFile` is marked as such, but it should return a NULL pointer when failing; and set
         // the last error state correspondingly.
         let map_view =
-            wrap_try!(unsafe { Ok(MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size.get() as usize + 4)) }, hndl)?;
+            wrap_try!(unsafe { Ok(MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size.get() + 4)) }, hndl)?;
+        if map_view.Value.is_null() {
+            return Err(MMFError::GeneralFailure);
+        }
         let lock = unsafe { RWLock::from_existing(map_view.Value.cast()) };
         let write_ptr = unsafe { map_view.Value.cast::<u8>().add(4) };
         Ok(Self {
             handle,
             name: init_name,
-            size_high_order: 0,
-            size_low_order: size.get(),
+            size_high_order: dw_high,
+            size_low_order: dw_low,
             size: size.get(),
             lock,
             map_view: Some(map_view.into()),
