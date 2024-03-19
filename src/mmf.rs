@@ -1,9 +1,12 @@
-use super::states::RWLock;
+use super::{
+    err::{Error as MMFError, MMFResult},
+    states::RWLock,
+};
 use fixedstr::{ztr32, ztr64};
 use microseh::try_seh;
 use std::num::NonZeroU32;
 use windows::{
-    core::{Error as WErr, HRESULT, PCSTR},
+    core::{Error as WErr, Result as WRes, HRESULT, PCSTR},
     Win32::{
         Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE},
         System::Memory::{
@@ -24,8 +27,8 @@ pub enum Namespace {
 }
 
 pub trait Mmf {
-    fn read(&self, count: usize) -> Result<Vec<u8>, WErr>;
-    fn read_to_buf(&self, buffer: &mut Vec<u8>, count: usize) -> Result<(), WErr>;
+    fn read(&self, count: usize) -> MMFResult<Vec<u8>>;
+    fn read_to_buf(&self, buffer: &mut Vec<u8>, count: usize) -> MMFResult<()>;
     fn write(&self, buffer: &[u8]) -> Result<(), WErr>;
 }
 
@@ -34,17 +37,15 @@ pub trait Mmf {
 /// resulting boilerplate is literally all it takes to further process the code. The choice for a result is entirely
 /// based on the fact that most `windows-rs` calls return results, so it's generally less effort this way.
 macro_rules! wrap_try {
-    ($func:expr) => {{
-        let mut res: Result<_, WErr> = Err(WErr::empty());
-        if let Err(e) = try_seh(|| res = $func) {
-            return Err(WErr::new(HRESULT(e.code() as i32).into(), e.to_string()));
+    ($func:expr, $res:ident) => {{
+        let mut $res: WRes<_> = Err(WErr::empty());
+        let res2 = try_seh(|| $res = $func);
+        if let Err(e) = res2 {
+            return Err(WErr::new(HRESULT(e.code() as i32).into(), e.to_string()).into());
         }
-        res?
+        $res.map_err(MMFError::from)
     }};
 }
-
-/// I can't believe this is now required. WTAF is MS doing here?
-const WIN_OK: WErr = WErr::empty();
 
 /// A simple struct wrapping a [Memory Mapped File](https://learn.microsoft.com/en-us/windows/win32/memory/creating-named-shared-memory).
 /// It contains all the data required to create and keep alive a [`HANDLE`] to a Memory Mapped File. The [`HANDLE`] is
@@ -101,7 +102,7 @@ impl<'a> MemoryMappedFile<'a> {
     /// will make a large part of the file inaccessible to other code trying to read it from a 32-bit process.
     /// The total size allocated will be 4 bytes larger than the specified size, but only after checking the input size
     /// is non-zero.
-    pub fn new(size: NonZeroU32, name: &str, namespace: Namespace) -> Result<Self, WErr> {
+    pub fn new(size: NonZeroU32, name: &str, namespace: Namespace) -> MMFResult<Self> {
         // Build the name to use for the MMF
         let init_name = match namespace {
             Namespace::GLOBAL => ztr64::make(&format!("{GLOBAL_NAMESPACE}{name}")),
@@ -111,14 +112,16 @@ impl<'a> MemoryMappedFile<'a> {
         // fuckin' windows
         let mmf_name = PCSTR::from_raw(init_name.to_ptr());
         // Acquire a handle and exit if we snag an error
-        let handle = wrap_try!(unsafe {
-            CreateFileMappingA(INVALID_HANDLE_VALUE, None, PAGE_READWRITE, 0, size.get() + 4, mmf_name)
-        });
-
+        let handle = wrap_try!(
+            unsafe { CreateFileMappingA(INVALID_HANDLE_VALUE, None, PAGE_READWRITE, 0, size.get() + 4, mmf_name) },
+            hndl
+        )?;
         // Unsafe because `MapViewOfFile` is marked as such, but it should return a NULL pointer when failing; and set
         // the last error state correspondingly.
-        let map_view =
-            wrap_try!(unsafe { Ok(MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size.get() as usize + 4,)) });
+        let map_view = wrap_try!(
+            unsafe { Ok(MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size.get() as usize + 4)) },
+            mapview
+        )?;
 
         // Waste some time to ensure the memory is zeroed out - I learned the importance of this the hard way.
         let mut zeroing = Vec::with_capacity(size.get() as usize + 4);
@@ -140,7 +143,7 @@ impl<'a> MemoryMappedFile<'a> {
         })
     }
 
-    pub fn open(size: NonZeroU32, name: &str, namespace: Namespace) -> Result<Self, WErr> {
+    pub fn open(size: NonZeroU32, name: &str, namespace: Namespace) -> MMFResult<Self> {
         // Build the name to use for the MMF
         let init_name = match namespace {
             Namespace::GLOBAL => ztr64::make(&format!("{GLOBAL_NAMESPACE}{name}")),
@@ -149,11 +152,11 @@ impl<'a> MemoryMappedFile<'a> {
         };
         // fuckin' windows
         let mmf_name = PCSTR::from_raw(init_name.to_ptr());
-        let handle = wrap_try!(unsafe { OpenFileMappingA(FILE_MAP_ALL_ACCESS.0, false, mmf_name) });
+        let handle = wrap_try!(unsafe { OpenFileMappingA(FILE_MAP_ALL_ACCESS.0, false, mmf_name) }, hndl)?;
         // Unsafe because `MapViewOfFile` is marked as such, but it should return a NULL pointer when failing; and set
         // the last error state correspondingly.
         let map_view =
-            wrap_try!(unsafe { Ok(MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size.get() as usize + 4,)) });
+            wrap_try!(unsafe { Ok(MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size.get() as usize + 4)) }, hndl)?;
         let lock = unsafe { RWLock::from_existing(map_view.Value.cast()) };
         let write_ptr = unsafe { map_view.Value.cast::<u8>().add(4) };
         Ok(Self {
@@ -183,10 +186,10 @@ impl<'a> MemoryMappedFile<'a> {
         self.name.to_string()
     }
 
-    pub fn close(&self) -> Result<(), WErr> {
-        match wrap_try!(unsafe { Ok(CloseHandle(self.handle)) }) {
-            Err(WIN_OK) | Ok(_) => Ok(()),
-            err => err.inspect_err(|e| eprintln!("Error closing MMF's handle ({}): {:#?}", e.code(), e.message())),
+    pub fn close(&self) -> MMFResult<()> {
+        match wrap_try!(unsafe { CloseHandle(self.handle) }, res) {
+            Err(MMFError::OS_OK(_)) | Ok(_) => Ok(()),
+            err => err.inspect_err(|e| eprintln!("Error closing MMF's handle: {:#?}", e)),
         }
     }
 }
@@ -204,7 +207,7 @@ impl<'a> Mmf for MemoryMappedFile<'a> {
     /// - 19: Write Protected; the file has a write lock on it which means reading might return incomplete data, or the
     ///   maximum amount of readers has been reached (this should not happen assuming all implementations are clean).
     #[inline]
-    fn read(&self, count: usize) -> Result<Vec<u8>, WErr> {
+    fn read(&self, count: usize) -> Result<Vec<u8>, MMFError> {
         let mut buf = Vec::with_capacity(self.size as usize);
         self.read_to_buf(&mut buf, count)?;
         Ok(buf)
@@ -212,17 +215,14 @@ impl<'a> Mmf for MemoryMappedFile<'a> {
 
     /// See the documentation for [Self::read()], except this takes a buffer to write to.
     /// If the buffer is smaller than the MMF, data will be truncated.
-    fn read_to_buf(&self, buffer: &mut Vec<u8>, count: usize) -> Result<(), WErr> {
+    fn read_to_buf(&self, buffer: &mut Vec<u8>, count: usize) -> Result<(), MMFError> {
         let to_read = if count == 0 { buffer.capacity().min(self.size as usize) } else { count };
         if let Some(_) = &self.map_view {
             if !self.lock.initialized() {
-                return Err(WErr::new(HRESULT(9).into(), "File is uninitialized!"));
+                return Err(MMFError::Uninitialized);
             }
-            if self.lock.writelocked() {
-                return Err(WErr::new(HRESULT(19).into(), "File is writelocked!"));
-            }
-            if let Err(_) = self.lock.lock_read() {
-                return Err(WErr::new(HRESULT(19).into(), "The lock has hit the maximum amount of readers!"));
+            if let Err(e) = self.lock.lock_read() {
+                return Err(e);
             }
             // safety: the buffer is allocated elsewhere, so we know the memory doesn't overlap. With the size check, we
             // also ensure we don't copy more bytes than what fits
@@ -233,7 +233,7 @@ impl<'a> Mmf for MemoryMappedFile<'a> {
             self.lock.unlock_read().unwrap();
             Ok(())
         } else {
-            Err(WErr::new(HRESULT(2).into(), "No memory mapped file has been opened yet!"))
+            Err(MMFError::MMF_NotFound)
         }
     }
 
@@ -286,12 +286,10 @@ impl From<MEMORY_MAPPED_VIEW_ADDRESS> for MemoryMappedView {
 }
 
 impl MemoryMappedView {
-    fn unmap(&self) -> Result<(), WErr> {
-        match wrap_try!(unsafe { Ok(UnmapViewOfFile(self.address)) }) {
-            Err(WIN_OK) | Ok(_) => Ok(()),
-            err => {
-                err.inspect_err(|e| eprintln!("Error unmapping the view of the MMF ({}): {:#?}", e.code(), e.message()))
-            }
+    fn unmap(&self) -> MMFResult<()> {
+        match wrap_try!(unsafe { UnmapViewOfFile(self.address) }, res) {
+            Err(MMFError::OS_OK(_)) | Ok(_) => Ok(()),
+            err => err.inspect_err(|e| eprintln!("Error unmapping the view of the MMF: {:#?}", e)),
         }
     }
 }
