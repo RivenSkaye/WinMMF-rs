@@ -111,27 +111,31 @@ impl<'a> MemoryMappedFile<'a> {
             Namespace::LOCAL => ztr64::make(&format!("{LOCAL_NAMESPACE}{name}")),
             Namespace::CUSTOM => ztr64::make(name),
         };
+
         // fuckin' windows
         let mmf_name = PCSTR::from_raw(init_name.to_ptr());
         let (dw_low, dw_high) = (size.get() + 4).split();
+
         // Acquire a handle and exit if we snag an error.
         // Safety: handled through microSEH
         let handle = wrap_try!(
             unsafe { CreateFileMappingA(INVALID_HANDLE_VALUE, None, PAGE_READWRITE, dw_high, dw_low, mmf_name) },
             hndl
         )?;
+
         // Unsafe because `MapViewOfFile` is marked as such, but it should return a NULL pointer when failing; and set
         // the last error state correspondingly.
-        let map_view = wrap_try!(
-            unsafe { Ok(MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size.get() as usize + 4)) },
-            mapview
-        )?;
+        let map_view =
+            wrap_try!(unsafe { Ok(MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size.get() + 4)) }, mapview)?;
+
+        // Explicit check to make sure we have something that works
         if unsafe { GetLastError() }.is_err() {
             return Err(WErr::from_win32().into());
         }
+
         // Waste some time to ensure the memory is zeroed out - I learned the importance of this the hard way.
-        let mut zeroing = Vec::with_capacity(size.get() as usize + 4);
-        zeroing.resize(size.get() as usize + 4, 0);
+        let mut zeroing = Vec::<u8>::new();
+        zeroing.resize(size.get() + 4, 0);
         unsafe { std::ptr::copy(zeroing.as_ptr(), map_view.Value.cast(), zeroing.len()) };
 
         // safety:
@@ -218,7 +222,7 @@ impl<'a> Mmf for MemoryMappedFile<'a> {
     ///   maximum amount of readers has been reached (this should not happen assuming all implementations are clean).
     #[inline]
     fn read(&self, count: usize) -> Result<Vec<u8>, MMFError> {
-        let mut buf = Vec::with_capacity(self.size as usize);
+        let mut buf = Vec::with_capacity(self.size);
         self.read_to_buf(&mut buf, count)?;
         Ok(buf)
     }
@@ -226,7 +230,7 @@ impl<'a> Mmf for MemoryMappedFile<'a> {
     /// See the documentation for [Self::read()], except this takes a buffer to write to.
     /// If the buffer is smaller than the MMF, data will be truncated.
     fn read_to_buf(&self, buffer: &mut Vec<u8>, count: usize) -> Result<(), MMFError> {
-        let to_read = if count == 0 { buffer.capacity().min(self.size as usize) } else { count };
+        let to_read = if count == 0 { buffer.capacity().min(self.size) } else { count };
         if let Some(_) = &self.map_view {
             if !self.lock.initialized() {
                 return Err(MMFError::Uninitialized);
@@ -259,7 +263,7 @@ impl<'a> Mmf for MemoryMappedFile<'a> {
     /// - 9: Invalid block; the lock is telling us this data has not yet been initialized.
     /// - All errors from [Self::read()] as a read is required to update the lock.
     fn write(&self, buffer: &[u8]) -> MMFResult<()> {
-        let cap = buffer.len().min(self.size as usize);
+        let cap = buffer.len().min(self.size);
         if cap < buffer.len() {
             return Err(MMFError::NotEnoughMemory);
         }
