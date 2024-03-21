@@ -16,3 +16,8 @@
         "Win32_System_Memory"
     ]}
     windows-ext = "0.0.2"
+
+[features]
+    default    = ["impl_mmf"]
+    impl_mmf   = ["namespaces"]
+    namespaces = []
