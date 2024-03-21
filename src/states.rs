@@ -25,8 +25,11 @@ use super::err::{Error, MMFResult};
 /// easier to work with than two bytes and a word.
 #[derive(Debug)]
 pub struct RWLock<'a> {
+    /// An Atomic reference. Alignment is usually not an issue considering Windows aligns views to pointers by default.
     chunk: &'a AtomicU32,
+    /// [`Ordering`] to use for load ops.
     load_order: Ordering,
+    /// [`Ordering`] to use for store ops.
     store_order: Ordering,
 }
 
@@ -191,12 +194,14 @@ impl<'a> RWLock<'a> {
         self.merge_lock(bytes)
     }
 
+    /// Takes the [`u32`] from the lock and provides it as 4 [`u8`]s.
     #[inline(always)]
     fn split_lock(&self) -> (u8, u8, u8, u8) {
         let lock = self.chunk.load(Ordering::SeqCst);
         ((lock >> 24) as u8, (lock >> 16) as u8, (lock >> 8) as u8, lock as u8)
     }
 
+    /// Takes 4 [`u8`]s and packs them together into a [`u32`] to shove them into the lock.
     #[inline(always)]
     fn merge_lock(&self, bytes: (u8, u8, u8, u8)) {
         let lock = (bytes.0 as u32) << 24 & (bytes.1 as u32) << 16 & (bytes.2 as u32) << 8 & bytes.3 as u32;

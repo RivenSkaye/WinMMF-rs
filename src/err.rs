@@ -1,20 +1,36 @@
+//! Errors produced and introduced in this crate, to help users figure out what went wrong.
+//!
+//! Handling these is recommended, but if you don't then either the MMF was never opened, or will be closed when the
+//! program ends.
+
 use std::{error::Error as stderr, fmt};
 use windows::core::{Error as WErr, HRESULT};
 
+/// Errors used with Memory-Mapped Files.
 #[allow(non_camel_case_types)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[repr(u8)]
 pub enum Error {
+    /// Readlocked, don't write.
     ReadLocked = 0,
+    /// Writelocked, don't touch.
     WriteLocked = 1,
+    /// Uninitialized, who's to say what's in there?
+    /// Although MMFs created in this crate will just be nulls.
     Uninitialized = 2,
+    /// 255 concurrent readers, wtf
     MaxReaders = 3,
+    /// It's too big ~~onii-chan~~
     NotEnoughMemory = 4,
+    /// These are not the bytes you're looking for
     MMF_NotFound = 5,
+    /// Something else was racing you, this is scary.
     LockViolation = 6,
-    #[allow(dead_code)] // This is a good thing
+    /// No explanation, only errors
     GeneralFailure = 253,
+    /// Generic OS error that we can't do much with other than catching and forwarding
     OS_Err(WErr) = 254,
+    /// Yes, Windows provides an error when everything is OK. Task failed successfully.
     OS_OK(WErr) = 255,
 }
 
@@ -60,4 +76,5 @@ impl fmt::Display for Error {
     }
 }
 
+/// Thin wrapper type for [`Result`]s we produced.
 pub type MMFResult<T> = Result<T, Error>;

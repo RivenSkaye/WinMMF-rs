@@ -1,25 +1,59 @@
+//! Memory-Mapped Files, Rust-style
+//!
+//! This crate contains everything you need to work with Memory-Mapped files. Or you can just roll your own and build
+//! upon the [`Mmf`] trait defined here. This module exports some utilities and ease of use items and you're entirely
+//! free to use or not use them. By default, the implementations and namespaces are enabled. If you do not wish to do
+//! so, look at the implementation for [`MemoryMappedFile`] and check the `use` statements to see what you need to do to
+//! get things working.
+//!
+//! The internal implementation is built entirely around using [`fixedstr::zstr`] to keep references to strings alive
+//! because for some reason everything goes to hell if you don't. MicroSEH is just as much a core component here, and
+//! a macro is available for wrapping things that return errors from the windows crate.
+//! Take a look at [`wrap_try!`] for more info.
+//! ~~wdym don't pass refs to data you're dropping across the ffi boundary?~~
+//!
+//! While it would be possible to split things out further, using this much to ensure everything works smoothly helps
+//! keeping this maintanable and usable. If you need a more minimal implementation, feel free to yank whatever you need
+//! from here and instead building the crate without default features.
+
 use super::{
     err::{Error as MMFError, MMFResult},
     states::RWLock,
 };
 use fixedstr::{ztr32, ztr64};
 use microseh::try_seh;
-use std::num::NonZeroUsize;
 use windows::{
-    core::{Error as WErr, PCSTR},
+    core::Error as WErr,
     Win32::{
-        Foundation::{CloseHandle, GetLastError, SetLastError, HANDLE, INVALID_HANDLE_VALUE, WIN32_ERROR},
-        System::Memory::{
-            CreateFileMappingA, MapViewOfFile, OpenFileMappingA, UnmapViewOfFile, FILE_MAP_ALL_ACCESS,
-            MEMORY_MAPPED_VIEW_ADDRESS, PAGE_READWRITE,
-        },
+        Foundation::{SetLastError, HANDLE, WIN32_ERROR},
+        System::Memory::{UnmapViewOfFile, MEMORY_MAPPED_VIEW_ADDRESS},
     },
 };
+
+#[cfg(feature = "impl_mmf")]
+use std::{fmt, num::NonZeroUsize};
+#[cfg(feature = "impl_mmf")]
+use windows::{
+    core::PCSTR,
+    Win32::{
+        Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE},
+        System::Memory::{CreateFileMappingA, MapViewOfFile, OpenFileMappingA, FILE_MAP_ALL_ACCESS, PAGE_READWRITE},
+    },
+};
+#[cfg(feature = "impl_mmf")]
 use windows_ext::ext::QWordExt;
 
+/// Local namespace prefix
+/// Use this to ensure only you and your child processes can read this.
 pub const LOCAL_NAMESPACE: ztr32 = ztr32::const_make("Local\\");
+/// Global namespace prefix, requires SeCreateGlobal permission to create.
+/// [See MSDN](https://learn.microsoft.com/en-us/windows/win32/memory/creating-named-shared-memory#first-process)
+/// for more info
 pub const GLOBAL_NAMESPACE: ztr32 = ztr32::const_make("Global\\");
 
+#[cfg(feature = "namespaces")]
+/// Namespaces as an enum, to unambiguously represent relevant information.
+#[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum Namespace {
     LOCAL,
@@ -27,16 +61,39 @@ pub enum Namespace {
     CUSTOM,
 }
 
+#[cfg(feature = "namespaces")]
+impl fmt::Display for Namespace {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LOCAL => write!(f, "{LOCAL_NAMESPACE}"),
+            Self::GLOBAL => write!(f, "{GLOBAL_NAMESPACE}"),
+            _ => write!(f, "A custom namespace was used here."),
+        }
+    }
+}
+
+/// Basic trait for Memory Mapped Files.
+///
+/// Implementing this is ensures you have the bare minimum to actually use your MMF and this _might_ at some point be
+/// reworked to provide a proper File-like interface. Actually providing a File interface or trait implementation still
+/// requires a great deal of work, however, as raw pointers (which are used in a few places here) are not [`Send`] or
+/// [`Sync`]
 pub trait Mmf {
+    /// Read data from the MMF, return an owned Vec if all goes well.
+    /// The standard implementation creates a new Vec and calls [`Self::read_to_buf`]
     fn read(&self, count: usize) -> MMFResult<Vec<u8>>;
+    /// Read data from the MMF into a provided buffer.
     fn read_to_buf(&self, buffer: &mut Vec<u8>, count: usize) -> MMFResult<()>;
+    /// Write data to the MMF.
     fn write(&self, buffer: &[u8]) -> MMFResult<()>;
 }
 
 /// Replace the boilerplate for every time we need to call `try_seh`.
-/// The function **must** return a result, if you're ever not certain it does. manually wrap it in an `Ok()`. The
-/// resulting boilerplate is literally all it takes to further process the code. The choice for a result is entirely
-/// based on the fact that most `windows-rs` calls return results, so it's generally less effort this way.
+///
+/// The function **must** return a result that can be converted into a [`MMFResult`]. If you're ever not certain it
+/// does, manually wrap it in an `Ok()`. The resulting boilerplate is literally all it takes to further process the
+/// code. The choice for a result is entirely based on the fact that most `windows-rs` calls return results, so it's
+/// generally less effort this way.
 macro_rules! wrap_try {
     ($func:expr, $res:ident) => {{
         let mut $res: Result<_, _> = Err(WErr::empty());
@@ -81,6 +138,7 @@ pub struct MemoryMappedFile<'a> {
     write_ptr: *mut u8,
 }
 
+#[cfg(feature = "impl_mmf")]
 impl<'a> MemoryMappedFile<'a> {
     /// Attempt to create a new Memory Mapped File. Or fail _graciously_ if we can't.
     /// The size will be automatically divided into the upper and lower halves, as the function to allocate this memory
@@ -147,6 +205,10 @@ impl<'a> MemoryMappedFile<'a> {
         })
     }
 
+    /// Open an existing MMF, if it exists.
+    ///
+    /// I have no idea what happens if you call this on a fake name. Code responsibly.
+    /// In all reality though, it should return an error that you can handle.
     pub fn open(size: NonZeroUsize, name: &str, namespace: Namespace) -> MMFResult<Self> {
         // Build the name to use for the MMF
         let init_name = match namespace {
@@ -187,20 +249,24 @@ impl<'a> MemoryMappedFile<'a> {
     }
 
     #[allow(dead_code)]
+    /// Get the namespace of the file, if any. If an empty string is returned, it's Local.
     pub fn namespace(&self) -> String {
         self.name.split_once('\\').unwrap_or_default().0.to_owned()
     }
 
     #[allow(dead_code)]
+    /// Return the filename the MMF is bound to, which is only the whole name if no namespace is provided.
     pub fn filename(&self) -> String {
         self.name.split_once('\\').map(|s| s.1.to_owned()).unwrap_or(self.name.to_string())
     }
 
     #[allow(dead_code)]
+    /// Returns the stored name, which should be `[Namespace\]<FileName>`
     pub fn fullname(&self) -> String {
         self.name.to_string()
     }
 
+    /// Close the MMF. Don't worry about calling this, it's handled in [`Drop`].
     pub fn close(&self) -> MMFResult<()> {
         // Safety: microSEH handles the OS side of this error, and the match handles this end.
         match wrap_try!(unsafe { CloseHandle(self.handle) }, res) {
@@ -210,6 +276,8 @@ impl<'a> MemoryMappedFile<'a> {
     }
 }
 
+#[cfg(feature = "impl_mmf")]
+/// Implements a usable file-like interface for working with an MMF. Pass all input as bytes, please.
 impl<'a> Mmf for MemoryMappedFile<'a> {
     /// Attempts to read the entirety of the data as defined in [`Self::size`].
     /// This function succeeds if there is a value in [`Self::map_view`] but it cannot guarantee the data returned is
@@ -293,18 +361,25 @@ impl<'a> Mmf for MemoryMappedFile<'a> {
     }
 }
 
+/// Small struct wrapping a Windows type just to spare my eyes.
 #[derive(Debug, Clone)]
 pub struct MemoryMappedView {
     address: MEMORY_MAPPED_VIEW_ADDRESS,
 }
 
+/// I like `into()`
 impl From<MEMORY_MAPPED_VIEW_ADDRESS> for MemoryMappedView {
     fn from(value: MEMORY_MAPPED_VIEW_ADDRESS) -> Self {
         Self { address: value }
     }
 }
 
+/// Handle unmapping the view because we're nice like that.
 impl MemoryMappedView {
+    /// Unmaps the view.
+    /// There is currently no way to undo this, short of closing the MMF.
+    /// If you need to do or change something that causes unmapping of the view, and you do need to keep the relevant
+    /// data, it's best to open a new MMF before closing it. When the last handle to an MMF closes, it's destroyed.
     fn unmap(&self) -> MMFResult<()> {
         match wrap_try!(unsafe { UnmapViewOfFile(self.address) }, res) {
             Err(MMFError::OS_OK(_)) | Ok(_) => Ok(()),
@@ -313,12 +388,16 @@ impl MemoryMappedView {
     }
 }
 
+/// Handle unmapping on drop.
 impl Drop for MemoryMappedView {
+    /// Unmap the view before dropping.
     fn drop(&mut self) {
         self.unmap().unwrap_or(())
     }
 }
 
+#[cfg(feature = "impl_mmf")]
+/// Implement closing the handle to the MMF before dropping it, so the system can clean up resources.
 impl<'a> Drop for MemoryMappedFile<'a> {
     fn drop(&mut self) {
         self.close().unwrap_or(())
