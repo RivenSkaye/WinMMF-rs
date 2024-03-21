@@ -185,7 +185,8 @@ impl<'a> RWLock<'a> {
     }
 
     /// Nuke all existing write locks as there can only be one, legally.
-    /// Note that this should probably not be considered safe to use with multiple writers.
+    /// Note that this should probably not be considered safe to manually call
+    /// if multiple writers are touching the same MMF.
     pub fn unlock_write(&self) {
         let mut bytes = self.split_lock();
         if bytes.1 != 0 {
