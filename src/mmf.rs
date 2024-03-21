@@ -58,10 +58,7 @@ macro_rules! wrap_try {
 /// Once this reaches a stable-ish state, an unsafe function feature will be added to get access to the raw handle and
 /// map view.
 ///
-/// Currently the size is restricted to a u32 to prevent problems with `isize`/`usize` on 32-bit systems. I could opt to
-/// only support 64-bit, but knowing the edge cases with Windows in environments where this can pop up, that will
-/// probably end up being a footgun for myself. Will look into doing something with usize maybe. Though do people need
-/// 2^64 bytes worth of data for a single MMF? At that point, why not open another instead?
+/// Supports both x86 and AMD64 by leveraging usize, to allow target-sized ints to be used everywhere.
 #[derive(Debug)]
 pub struct MemoryMappedFile<'a> {
     /// The [`HANDLE`] to the created mapping
@@ -69,17 +66,14 @@ pub struct MemoryMappedFile<'a> {
     /// the "filename" portion
     name: ztr64,
     /// The higher order bits for the size of the opened file.
-    /// Always 0 for now, but this might change if a use case exists for more than 2^32 bytes allocated and mapped into
-    /// memory at the same time.
     #[allow(dead_code)]
     size_high_order: u32,
     /// The lower order bits for the size of the opened file.
     #[allow(dead_code)]
     size_low_order: u32,
-    /// The total size, should be the same as [`Self::size_low_order`].
-    /// Might change in a future version if I can be arsed to write pointer-sized code
+    /// The total size, which is the bits of high and low order appeneded.
     size: usize,
-    /// The lock. ~~3 pointers to their own bytes~~
+    /// The lock struct, which is where some of the cooler magic happens.
     lock: RWLock<'a>,
     /// The original MemoryMappedView; We need to keep this around for unmapping it.
     map_view: Option<MemoryMappedView>,
@@ -116,8 +110,7 @@ impl<'a> MemoryMappedFile<'a> {
         let mmf_name = PCSTR::from_raw(init_name.to_ptr());
         let (dw_low, dw_high) = (size.get() + 4).split();
 
-        // Acquire a handle and exit if we snag an error.
-        // Safety: handled through microSEH
+        // Safety: handled through microSEH and we check the last error status later. Failure here is failure there.
         let handle = wrap_try!(
             unsafe { CreateFileMappingA(INVALID_HANDLE_VALUE, None, PAGE_READWRITE, dw_high, dw_low, mmf_name) },
             hndl
@@ -128,7 +121,7 @@ impl<'a> MemoryMappedFile<'a> {
         let map_view =
             wrap_try!(unsafe { Ok(MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size.get() + 4)) }, mapview)?;
 
-        // Explicit check to make sure we have something that works
+        // Explicit check to make sure we have something that works (later is now)
         if unsafe { GetLastError() }.is_err() {
             return Err(WErr::from_win32().into());
         }
@@ -136,9 +129,10 @@ impl<'a> MemoryMappedFile<'a> {
         // Waste some time to ensure the memory is zeroed out - I learned the importance of this the hard way.
         let mut zeroing = Vec::<u8>::new();
         zeroing.resize(size.get() + 4, 0);
+        // safety: we're writing zeroes into memory we just got back from the OS
         unsafe { std::ptr::copy(zeroing.as_ptr(), map_view.Value.cast(), zeroing.len()) };
 
-        // safety:
+        // safety: we just zeroed this memory out and we're initializing it freshly
         let lock = unsafe { RWLock::from_raw(map_view.Value.cast()).initialize() };
         let write_ptr = unsafe { map_view.Value.cast::<u8>().add(4) };
         Ok(Self {
@@ -163,15 +157,21 @@ impl<'a> MemoryMappedFile<'a> {
         // fuckin' windows
         let mmf_name = PCSTR::from_raw(init_name.to_ptr());
         let (dw_low, dw_high) = (size.get() + 4).split();
-        // Acquire a handle and exit if we snag an error
+
+        // Safety: Issues here are issues later, and we check for them later.
         let handle = wrap_try!(unsafe { OpenFileMappingA(FILE_MAP_ALL_ACCESS.0, false, mmf_name) }, hndl)?;
+
         // Unsafe because `MapViewOfFile` is marked as such, but it should return a NULL pointer when failing; and set
         // the last error state correspondingly.
         let map_view =
-            wrap_try!(unsafe { Ok(MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size.get() + 4)) }, hndl)?;
-        if map_view.Value.is_null() {
-            return Err(MMFError::GeneralFailure);
+            wrap_try!(unsafe { Ok(MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size.get() + 4)) }, mmva)?;
+
+        // Explicit check to make sure we have something that works (later is now)
+        if unsafe { GetLastError() }.is_err() {
+            return Err(WErr::from_win32().into());
         }
+
+        // Safety: We know where these bytes come from (ideally, they were opened by this lib)
         let lock = unsafe { RWLock::from_existing(map_view.Value.cast()) };
         let write_ptr = unsafe { map_view.Value.cast::<u8>().add(4) };
         Ok(Self {
@@ -202,6 +202,7 @@ impl<'a> MemoryMappedFile<'a> {
     }
 
     pub fn close(&self) -> MMFResult<()> {
+        // Safety: microSEH handles the OS side of this error, and the match handles this end.
         match wrap_try!(unsafe { CloseHandle(self.handle) }, res) {
             Err(MMFError::OS_OK(_)) | Ok(_) => Ok(()),
             err => err.inspect_err(|e| eprintln!("Error closing MMF's handle: {:#?}", e)),
@@ -238,8 +239,9 @@ impl<'a> Mmf for MemoryMappedFile<'a> {
             if let Err(e) = self.lock.lock_read() {
                 return Err(e);
             }
-            // safety: the buffer is allocated elsewhere, so we know the memory doesn't overlap. With the size check, we
-            // also ensure we don't copy more bytes than what fits
+            // safety: memory may overlap with copy_to. With the size check, we also ensure we don't copy more bytes
+            // than what fits. in the target Vec. If someone gave us a dirty Vec, that's on them. Notably, that would
+            // cause the same kind of problems in safe code, because a dirty Vec violates soundness.
             unsafe {
                 buffer.set_len(to_read);
                 self.write_ptr.copy_to(buffer.as_mut_ptr(), to_read)
