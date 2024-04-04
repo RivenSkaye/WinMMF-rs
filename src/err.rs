@@ -5,6 +5,7 @@
 
 use std::{error::Error as stderr, fmt};
 use windows::core::{Error as WErr, HRESULT};
+use std::borrow::Cow;
 
 /// Errors used with Memory-Mapped Files.
 #[allow(non_camel_case_types)]
@@ -60,19 +61,20 @@ impl From<WErr> for Error {
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let text = String::from(match self {
-            Self::OS_OK(_) => "Task failed successfully!".to_owned(),
-            Self::WriteLocked => "Memory Mapped File was locked for writing".to_owned(),
-            Self::ReadLocked => "Memory Mapped File was locked for reading".to_owned(),
-            Self::LockViolation => "MMF was locked between checking and acquiring the lock!".to_owned(),
-            Self::NotEnoughMemory => "The requested write was larger than the buffer size".to_owned(),
-            Self::MMF_NotFound => "E002: No memory mapped file has been opened yet!".to_owned(),
-            Self::Uninitialized => "Memory Mapped File was not yet initialized".to_owned(),
-            Self::MaxReaders => "The maximum amount of readers is already registered".to_owned(),
-            Self::GeneralFailure => "No idea what the hell happened here...".to_owned(),
-            Self::OS_Err(c) => format!("E{c:02}: Generic OS Error"),
-        });
-        write!(f, "{text}: {}", self.source().map(|e| e.to_string()).unwrap_or("occurred in this crate.".to_owned()))
+        let text: Cow<str> = match self {
+            Self::OS_OK(_) => Cow::from("Task failed successfully!"),
+            Self::WriteLocked => Cow::from("Memory Mapped File was locked for writing"),
+            Self::ReadLocked => Cow::from("Memory Mapped File was locked for reading"),
+            Self::LockViolation => Cow::from("MMF was locked between checking and acquiring the lock!"),
+            Self::NotEnoughMemory => Cow::from("The requested write was larger than the buffer size"),
+            Self::MMF_NotFound => Cow::from("E002: No memory mapped file has been opened yet!"),
+            Self::Uninitialized => Cow::from("Memory Mapped File was not yet initialized"),
+            Self::MaxReaders => Cow::from("The maximum amount of readers is already registered"),
+            Self::GeneralFailure => Cow::from("No idea what the hell happened here..."),
+            Self::OS_Err(c) => Cow::from(format!("E{c:02}: Generic OS Error")),
+        };
+
+        write!(f, "{text}: {}", self.source().map(|e| Cow::from(e.to_string())).unwrap_or(Cow::from("occurred in this crate.")))
     }
 }
 
