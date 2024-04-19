@@ -18,7 +18,7 @@
 
 use super::{
     err::{Error as MMFError, MMFResult},
-    states::RWLock,
+    states::{MMFLock, RWLock},
 };
 use fixedstr::{ztr32, ztr64};
 use microseh::try_seh;
@@ -117,7 +117,7 @@ macro_rules! wrap_try {
 ///
 /// Supports both x86 and AMD64 by leveraging usize, to allow target-sized ints to be used everywhere.
 #[derive(Debug)]
-pub struct MemoryMappedFile<'a> {
+pub struct MemoryMappedFile {
     /// The [`HANDLE`] to the created mapping
     handle: HANDLE,
     /// the "filename" portion
@@ -131,7 +131,7 @@ pub struct MemoryMappedFile<'a> {
     /// The total size, which is the bits of high and low order appeneded.
     size: usize,
     /// The lock struct, which is where some of the cooler magic happens.
-    lock: RWLock<'a>,
+    lock: Box<dyn MMFLock>,
     /// The original MemoryMappedView; We need to keep this around for unmapping it.
     map_view: Option<MemoryMappedView>,
     /// The pointer we can actually write into without fucking up the lock
@@ -139,7 +139,7 @@ pub struct MemoryMappedFile<'a> {
 }
 
 #[cfg(feature = "impl_mmf")]
-impl<'a> MemoryMappedFile<'a> {
+impl MemoryMappedFile {
     /// Attempt to create a new Memory Mapped File. Or fail _graciously_ if we can't.
     /// The size will be automatically divided into the upper and lower halves, as the function to allocate this memory
     /// requires them to be split. The name of the file should be either one of:
@@ -191,7 +191,7 @@ impl<'a> MemoryMappedFile<'a> {
         unsafe { std::ptr::copy(zeroing.as_ptr(), map_view.Value.cast(), zeroing.len()) };
 
         // safety: we just zeroed this memory out and we're initializing it freshly
-        let lock = unsafe { RWLock::from_raw(map_view.Value.cast()).initialize() };
+        let lock = Box::new(unsafe { RWLock::from_raw(map_view.Value.cast()).initialize() });
         let write_ptr = unsafe { map_view.Value.cast::<u8>().add(4) };
         Ok(Self {
             handle,
@@ -199,8 +199,8 @@ impl<'a> MemoryMappedFile<'a> {
             size_high_order: dw_high,
             size_low_order: dw_low,
             size: size.get(),
-            lock,
             map_view: Some(map_view.into()),
+            lock,
             write_ptr,
         })
     }
@@ -234,7 +234,7 @@ impl<'a> MemoryMappedFile<'a> {
         }
 
         // Safety: We know where these bytes come from (ideally, they were opened by this lib)
-        let lock = unsafe { RWLock::from_existing(map_view.Value.cast()) };
+        let lock = Box::new(unsafe { RWLock::from_existing(map_view.Value.cast()) });
         let write_ptr = unsafe { map_view.Value.cast::<u8>().add(4) };
         Ok(Self {
             handle,
@@ -278,7 +278,7 @@ impl<'a> MemoryMappedFile<'a> {
 
 #[cfg(feature = "impl_mmf")]
 /// Implements a usable file-like interface for working with an MMF. Pass all input as bytes, please.
-impl<'a> Mmf for MemoryMappedFile<'a> {
+impl Mmf for MemoryMappedFile {
     /// Attempts to read the entirety of the data as defined in [`Self::size`].
     /// This function succeeds if there is a value in [`Self::map_view`] but it cannot guarantee the data returned is
     /// correct. This is an unfortunate side effect of having to work with raw pointers and bytes in memory.
@@ -398,7 +398,7 @@ impl Drop for MemoryMappedView {
 
 #[cfg(feature = "impl_mmf")]
 /// Implement closing the handle to the MMF before dropping it, so the system can clean up resources.
-impl<'a> Drop for MemoryMappedFile<'a> {
+impl Drop for MemoryMappedFile {
     fn drop(&mut self) {
         self.close().unwrap_or(())
     }
