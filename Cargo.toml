@@ -18,6 +18,7 @@
     windows-ext = "0.0.2"
 
 [features]
-    default    = ["impl_mmf"]
+    default    = ["impl_lock", "impl_mmf"]
+    impl_lock  = []
     impl_mmf   = ["namespaces"]
     namespaces = []
