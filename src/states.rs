@@ -1,39 +1,93 @@
-use std::sync::atomic::{AtomicU32, Ordering};
+use core::fmt;
+use std::{
+    ops::AddAssign,
+    sync::atomic::{fence, AtomicU32, Ordering},
+};
 
 use super::err::{Error, MMFResult};
 
-/// Struct that serves as four packed u8 values, to indicate init, read and write locking on an MMF.
+/// Blanket trait for implementing locks to be used with MMFs.
+/// The default implementation applied to [`RWLock`] can be used with a custom MMF implementation and vice-versa,
+/// but either way would require accounting for the fact this lock is designed to be stored inside the MMF.
+/// From the lock's point of view, a pointer to some other u32 would work just as well but this requires some other
+/// form of synchronizing access accross thread and application boundaries.
+///
+/// Users are free to use the default lock and MMF implementations independently of one another.
+pub trait MMFLock {
+    /// Check if the data this lock is has been initialized for use
+    fn initialized(&self) -> bool;
+    /// Checks if this lock is readlocked. Does not indicate writelock status; use [`MMFLock::writelocked`] for that.
+    fn readlocked(&self) -> bool;
+    /// Checks if this lock is writelocked. Use this to wait before reading.
+    fn writelocked(&self) -> bool;
+    /// Checks if there are any acitve locks, including the initialization locks.
+    fn locked(&self) -> bool;
+    /// Acquire a readlock, if at all possible. Otherwise error.
+    fn lock_read(&self) -> MMFResult<()>;
+    /// Release a readlock, clearing the readlock state if this was the last lock.
+    fn unlock_read(&self) -> MMFResult<()>;
+    /// Lock this file for writing if possible.
+    fn lock_write(&self) -> MMFResult<()>;
+    /// Nuke all existing write locks as there can only be one, legally.
+    fn unlock_write(&self);
+    fn spin(&self, tries: &mut usize) -> MMFResult<bool>;
+}
+
+impl fmt::Debug for dyn MMFLock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Lock {{ {} }}",
+            match (self.writelocked(), self.readlocked()) {
+                (true, false) => "Write",
+                (false, true) => "Read",
+                (false, false) => "None",
+                _ => unreachable!(),
+            }
+        )
+    }
+}
+
+/// Packed binary data to represent the locking state of the MMF.
 /// The wrapper implementation must set these bytes depending on the situation and actions being taken.
 /// Due to the fact Windows only guarantees atomic operations on 32-bit ints, (and 64-bit ones only for 64-bit
 /// applications on 64-bit Windows), the safest option here is to ensure we're using a 32-bit Atomic.
-/// For all your safety and happy unicorn concerns, the default ordering is [`Ordering::SeqCst`]. This can be changed if
-/// consumers so desire, but considering the nature of IPC mechanisms it was deemed logical to use a single total
-/// modification order where possible.
 ///
 /// This atomic will be split into the following data:
-/// - Highest byte: initialization state; if this is non-zero, the data portion is not initialized.
-/// - Second byte: writelock; if this is non-zero, do not attempt to read or write.
-/// - Third byte: Readers; don't write if it's non-zero. Increment when locking, decrement when unlocking.
-/// - Fourth byte: innocent padding, consumers can use this for their own use cases.
-///
-/// The choice to limit readers was made for two reasons. First off, there's no situation in which you'd expect more
-/// than 255 concurrent readers. Secondly, the initial design did not use atomics but this leads to soundness concerns
-/// across the application boundary. The atomic approach means either using 15 bits for storing readers and manually
-/// accounting for overflow into the write bit, or it means limiting readers so bitops can be used instead. As the
-/// latter is easier to maintain, and we have the spare bandwidth on account of atomic guarantees being exclusively for
-/// pointer sizes, that's the chosen approach. Leaving the 4th byte empty is an extension of that choice; 4 bytes is
-/// easier to work with than two bytes and a word.
+/// - First bit: write lock state. A single writer should prevent all other access.
+/// - First byte: after the writelock we have a few left, this serves for tracking init state.
+/// - The remaining three are for read lock counting. Beware though, that while this allows you to have a count of up to
+///   16_777_215 locks, the OS limits all processes to that number of open handles. This means nobody should ever be
+///   remotely close to the actual limit. It also means that if for some reason there _are_ (2^24) - 1 locks, we get to
+///   call upon "implementation defined results" which for this struct means we hit `unreachable!()`. Enjoy!
+#[cfg(feature = "impl_lock")]
 #[derive(Debug)]
 pub struct RWLock<'a> {
     /// An Atomic reference. Alignment is usually not an issue considering Windows aligns views to pointers by default.
     chunk: &'a AtomicU32,
-    /// [`Ordering`] to use for load ops.
-    load_order: Ordering,
-    /// [`Ordering`] to use for store ops.
-    store_order: Ordering,
+    /// A short-circuit way to prevent unneeded lock modifications. Valid values are tracked in this struct.
+    /// Possible values are:
+    /// - 128: we hold the write lock
+    /// - 1  : we hold the read lock
+    /// - 0  : we hold no locks at all
+    /// The remaining 6 bitflags possible are as of yet undetermined.
+    current_locks: u8,
 }
 
+#[cfg(feature = "impl_lock")]
 impl<'a> RWLock<'a> {
+    /// Mask to check if we're holding a READ lock
+    const HOLDING_R: u8 = 0b00000001;
+    /// Mask to check if we're holding a WRITE lock
+    const HOLDING_W: u8 = 0b10000000;
+
+    /// Mask to check if the lock is initialized
+    pub const INITIALIZE_MASK: u32 = 255 << 24;
+    /// Mask to check if it's locked for WRITING
+    pub const WRITE_LOCK_MASK: u32 = 0b1 << 31;
+    /// Mask to check if it's locked for READING
+    pub const READ_LOCK_MASK: u32 = !Self::INITIALIZE_MASK;
+
     /// Construct a lock from existing pointers.
     /// This is meant to be used with some external mechanism to allow reading and writing lock state directly to and
     /// from some larger struct. The lock will claim the first four bytes behind this pointer; if you do not intend to
@@ -55,7 +109,7 @@ impl<'a> RWLock<'a> {
         if pointer.is_null() {
             panic!("Never, ever pass a null pointer into a lock!")
         }
-        Self { chunk: AtomicU32::from_ptr(pointer.cast()), load_order: Ordering::SeqCst, store_order: Ordering::SeqCst }
+        Self { chunk: AtomicU32::from_ptr(pointer.cast()), current_locks: 0 }
     }
 
     /// Similar to [`Self::from_existing`], except it clears all state and ensures [`Self::initialized`] returns false.
@@ -63,51 +117,8 @@ impl<'a> RWLock<'a> {
     /// however, that it invalidates any other locks that use the same pointer and clears any data in the last byte.
     pub unsafe fn from_raw(pointer: *mut u8) -> Self {
         let lock = Self::from_existing(pointer);
-        lock.chunk.store(255 << 24, Ordering::SeqCst);
+        lock.chunk.store(Self::INITIALIZE_MASK, Ordering::Release);
         lock
-    }
-
-    #[allow(dead_code)]
-    /// Create a copy of this lock with the specified load and store orders.
-    ///
-    /// Only allows for the usual valid operation orders and _will_ panic if either load or store is passed a wrong
-    /// value. Refer to [`Ordering`] for which values are allowed for which operations. The panic choices were made to
-    /// be the same as what is done in the source for `core::sync::atomic.rs` to prevent getting the same panics on
-    /// access instead of initialization.
-    pub fn set_ordering(&mut self, load: Ordering, store: Ordering) {
-        match (load, store) {
-            (Ordering::Release, _) => panic!("there is no such thing as release load for atomics"),
-            (_, Ordering::Acquire) => panic!("there is no such thing as an acquire store"),
-            (Ordering::AcqRel, _) | (_, Ordering::AcqRel) => panic!("there is no such thing as an acquire-release load/store and this struct offers no combined operations."),
-            _ => {
-                self.load_order = load;
-                self.store_order = store;
-            }
-        };
-    }
-
-    /// Checks if this lock is readlocked. Does not indicate writelock status; use [`Self::writelocked()`] for that.
-    #[inline(always)]
-    pub fn readlocked(&self) -> bool {
-        (self.chunk.load(Ordering::SeqCst) & ((u8::MAX as u32) << 8)) > 0
-    }
-
-    /// Checks if this lock is writelocked. Use this to wait before reading.
-    #[inline(always)]
-    pub fn writelocked(&self) -> bool {
-        (self.chunk.load(Ordering::SeqCst) & ((u8::MAX as u32) << 16)) > 0
-    }
-
-    /// Checks if there are any acitve locks, including the initialization locks.
-    #[inline(always)]
-    pub fn locked(&self) -> bool {
-        self.chunk.load(Ordering::SeqCst) > 255
-    }
-
-    /// Check if the data this lock is has been initialized for use
-    #[inline(always)]
-    pub fn initialized(&self) -> bool {
-        (self.chunk.load(Ordering::SeqCst) & (255 << 24)) == 0
     }
 
     /// Mark this lock as initialized. This will clear any existing lock state, so make sure no locks are taken.
@@ -115,23 +126,53 @@ impl<'a> RWLock<'a> {
     /// The choice to clear all locks upon setting the init state was made to accommodate uses of
     /// [`Self::from_existing`] where it's reasonable to assume no locks are taken or the code using it handles the
     /// situation where the locks are cleared internally.
-    ///
-    /// **SAFETY**: the caller is responsible for ensuring no problems arise elsewhere. This method does not do anything
-    /// unsafe internally, but if care is not taken it might cause concurrent writes or allow readers while a write is
-    /// in progress due to resetting lock state!
-    pub unsafe fn set_init(&self) {
-        self.chunk.store(self.chunk.load(Ordering::SeqCst) & (u8::MAX as u32), Ordering::SeqCst)
+    pub fn set_init(&self) {
+        fence(Ordering::AcqRel);
+        _ = self.chunk.compare_exchange(Self::INITIALIZE_MASK, 0, Ordering::Release, Ordering::Relaxed);
+        fence(Ordering::AcqRel);
     }
 
     /// Thin wrapper around [`Self::set_init`] that returns self for chaining calls.
     /// The same safety concerns apply as for `set_init`.
-    pub unsafe fn initialize(self) -> Self {
+    pub fn initialize(self) -> Self {
         self.set_init();
         self
     }
 
-    /// Acquire a readlock, if at all possible. Otherwise error.
-    pub fn lock_read(&self) -> MMFResult<()> {
+    /// Takes the [`u32`] from the lock and provides it as a [`u8`] and a [`u32`] (by lack of a proper u24).
+    #[inline(always)]
+    fn split_lock(lock: u32) -> (u8, u32) {
+        ((lock >> 24) as u8, lock & Self::READ_LOCK_MASK)
+    }
+
+    /// Takes 4 [`u8`]s and packs them together into a [`u32`] to shove them into the lock.
+    #[inline(always)]
+    fn merge_lock(&self, bytes: (u8, u32)) -> u32 {
+        ((bytes.0 as u32) << 24) | bytes.1
+    }
+}
+
+impl<'a> MMFLock for RWLock<'a> {
+    #[inline(always)]
+    fn initialized(&self) -> bool {
+        (self.chunk.load(Ordering::Acquire) & Self::INITIALIZE_MASK) == 0
+    }
+    #[inline(always)]
+    fn readlocked(&self) -> bool {
+        (self.chunk.load(Ordering::Acquire) & Self::READ_LOCK_MASK) > 0
+    }
+
+    #[inline(always)]
+    fn writelocked(&self) -> bool {
+        (self.chunk.load(Ordering::Acquire) & Self::WRITE_LOCK_MASK) > 0
+    }
+
+    #[inline(always)]
+    fn locked(&self) -> bool {
+        self.chunk.load(Ordering::Acquire) > 255
+    }
+
+    fn lock_read(&self) -> MMFResult<()> {
         if !self.initialized() {
             return Err(Error::Uninitialized);
         } else if self.writelocked() {
@@ -149,8 +190,7 @@ impl<'a> RWLock<'a> {
         }
     }
 
-    /// Release a readlock, clearing the readlock state if this was the last lock.
-    pub fn unlock_read(&self) -> MMFResult<()> {
+    fn unlock_read(&self) -> MMFResult<()> {
         if !self.initialized() {
             Err(Error::Uninitialized)
         } else if self.readlocked() {
@@ -168,9 +208,7 @@ impl<'a> RWLock<'a> {
         }
     }
 
-    /// Lock this file for writing if possible. If a read lock exists and the read lock counter is zero, this will clear
-    /// the lock. If any actively acquired lock is present, fail gracefully.
-    pub fn lock_write(&self) -> MMFResult<()> {
+    fn lock_write(&self) -> MMFResult<()> {
         if !self.initialized() {
             Err(Error::Uninitialized)
         } else if self.writelocked() {
@@ -178,34 +216,42 @@ impl<'a> RWLock<'a> {
         } else if self.readlocked() {
             Err(Error::ReadLocked)
         } else {
-            let mut bytes = self.split_lock();
+            let mut bytes = RWLock::split_lock(1);
             bytes.1 = 1;
             Ok(self.merge_lock(bytes))
         }
     }
 
-    /// Nuke all existing write locks as there can only be one, legally.
-    /// Note that this should probably not be considered safe to manually call
-    /// if multiple writers are touching the same MMF.
-    pub fn unlock_write(&self) {
-        let mut bytes = self.split_lock();
+    fn unlock_write(&self) {
+        let mut bytes = RWLock::split_lock(1);
         if bytes.1 != 0 {
             bytes.1 = 0
         }
         self.merge_lock(bytes)
     }
 
-    /// Takes the [`u32`] from the lock and provides it as 4 [`u8`]s.
-    #[inline(always)]
-    fn split_lock(&self) -> (u8, u8, u8, u8) {
-        let lock = self.chunk.load(Ordering::SeqCst);
-        ((lock >> 24) as u8, (lock >> 16) as u8, (lock >> 8) as u8, lock as u8)
+    fn spin(&self, tries: &mut usize) -> MMFResult<bool> {
+        tries.add_assign(1);
+        if self.current_locks > 0 {
+            Ok(true)
+        } else if usize::MAX.gt(tries) {
+            Err(Error::LockViolation)
+        } else {
+            Ok(false)
+        }
     }
+}
 
-    /// Takes 4 [`u8`]s and packs them together into a [`u32`] to shove them into the lock.
-    #[inline(always)]
-    fn merge_lock(&self, bytes: (u8, u8, u8, u8)) {
-        let lock = (bytes.0 as u32) << 24 & (bytes.1 as u32) << 16 & (bytes.2 as u32) << 8 & bytes.3 as u32;
-        self.chunk.store(lock, Ordering::SeqCst)
-    }
+/// Takes the [`u32`] from the lock and provides it as a [`u8`] and a [`u32`] (by lack of a proper u24).
+#[cfg(feature = "impl_lock")]
+#[inline(always)]
+fn split_lock(lock: u32) -> (u8, u32) {
+    ((lock >> 24) as u8, lock & RWLock::READ_LOCK_MASK)
+}
+
+/// Takes 4 [`u8`]s and packs them together into a [`u32`] to shove them into the lock.
+#[cfg(feature = "impl_lock")]
+#[inline(always)]
+fn merge_lock(bytes: (u8, u32)) -> u32 {
+    ((bytes.0 as u32) << 24) | bytes.1
 }
