@@ -1,17 +1,16 @@
 [package]
-    authors      = ["Riven Skaye <riven@tae.moe>"]
-    categories   = ["filesystem", "memory-management", "os::windows-apis"]
-    description  = "A mostly safe Rust wrapper around Named Shared Memory on Windows. WIP"
-    edition      = "2021"
-    exclude      = [".rustfmt.toml"]
-    homepage     = "https://skaye.blog/winmmf/overview"
-    keywords     = ["ipc", "mmap", "shared-mem", "shm", "shmem", "windows", "winmmf"]
-    license      = "MPL-2.0"
-    license-file = "LICENSE"
-    name         = "winmmf"
-    readme       = "README.md"
-    repository   = "https://github.com/RivenSkaye/WinMMF-rs"
-    version      = "0.1.0"
+    authors     = ["Riven Skaye <riven@tae.moe>"]
+    categories  = ["filesystem", "memory-management", "os::windows-apis"]
+    description = "A mostly safe Rust wrapper around Named Shared Memory on Windows. WIP"
+    edition     = "2021"
+    exclude     = [".rustfmt.toml"]
+    homepage    = "https://skaye.blog/winmmf/overview"
+    keywords    = ["ipc", "mmap", "shared-mem", "shm", "shmem", "windows", "winmmf"]
+    license     = "MPL-2.0"
+    name        = "winmmf"
+    readme      = "README.md"
+    repository  = "https://github.com/RivenSkaye/WinMMF-rs"
+    version     = "0.1.0"
 
 [dependencies]
     fixedstr = {version = "0.5.5", features = ["std"]}
