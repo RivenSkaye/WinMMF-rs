@@ -3,6 +3,7 @@
     categories   = ["filesystem", "memory-management", "os::windows-apis"]
     description  = "A mostly safe Rust wrapper around Named Shared Memory on Windows. WIP"
     edition      = "2021"
+    exclude      = [".rustfmt.toml"]
     homepage     = "https://skaye.blog/winmmf/overview"
     keywords     = ["ipc", "mmap", "shared-mem", "shm", "shmem", "windows", "winmmf"]
     license      = "MPL-2.0"
