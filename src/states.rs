@@ -125,9 +125,30 @@ impl<'a> RWLock<'a> {
     /// It _is_ safe to assume the size and alignment are valid on Windows, however, as pointers are 0x4/0x4 or 0x8/0x8
     /// depending on 32-bit or 64-bit. Either is safe for use with AtomicU32 which is 0x4/0x4 on these platforms.
     ///
-    /// # Panics
+    /// ## Panics
     /// This function _will_ panic if called with a null pointer; ensuring initialization is hard, but ensuring non-null
     /// should not prove difficult to anyone working with raw pointers.
+    ///
+    /// ## example
+    /// ```
+    /// use std::sync::atomic::AtomicU32;
+    /// use winmmf::{states::*, *};
+    ///
+    /// unsafe {
+    ///     let bop = AtomicU32::new(0);
+    ///     let ptr = bop.as_ptr();
+    ///     let lock = RWLock::from_raw(ptr.cast());
+    ///     lock.set_init();
+    ///     // You're now free to do anything with the lock while `bop` lives
+    ///     let new_ptr = bop.as_ptr();
+    ///     let other_lock = RWLock::from_existing(new_ptr.cast());
+    ///
+    ///     lock.lock_write().unwrap();
+    ///
+    ///     assert!(other_lock.locked());
+    ///     assert!(other_lock.lock_read().is_err());
+    /// }
+    /// ```
     pub unsafe fn from_existing(pointer: *mut u8) -> Self {
         if pointer.is_null() {
             panic!("Never, ever pass a null pointer into a lock!")
