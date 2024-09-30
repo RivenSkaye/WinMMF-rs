@@ -42,7 +42,7 @@ impl fmt::Debug for dyn MMFLock {
                 (true, false) => "Write",
                 (false, true) => "Read",
                 (false, false) => "None",
-                _ => unreachable!(), // Both, how even?
+                (true, true) => "Poisoned",
             }
         )
     }
@@ -59,7 +59,17 @@ impl fmt::Debug for dyn MMFLock {
 /// - The remaining three are for read lock counting. Beware though, that while this allows you to have a count of up to
 ///   16_777_215 locks, the OS limits all processes to that number of open handles. This means nobody should ever be
 ///   remotely close to the actual limit. It also means that if for some reason there _are_ (2^24) - 1 locks, we get to
-///   call upon "implementation defined results" which are implemented here as [Error::MaxReaders]. Enjoy!
+///   call upon "implementation defined results" which are implemented here as [crate::err::Error::MaxReaders]. Enjoy!
+///
+/// To prevent a series of potentially problematic results, every unique instance of this lock should track what it
+/// holds internally as well. This also allows for every unique lock instance to limit the amount of locks held to
+/// ONE write lock and 127 read locks. Any one application shouldn't need more than that, and it allows us to do things
+/// like only clearing lock counters if we actually hold a lock to release. If your custom use-case has a need for more
+/// than 127 readers in one application, you're free to reuse the code here in a way that allows more readers than the
+/// OS. Just change the `current_lock` and `HOLDING_` constants to their 32-bit counterparts, then shift `HOLDING_W` 24
+/// bits to the left. The reason the default implementation doesn't do this, is that it was written to ensure it's safe
+/// to use. Weird OS quirks when going over the default limits don't fit that bill, so limiting the amount of open
+/// handles allows for guaranteeing safety assuming a sane system configuration.
 #[cfg(feature = "impl_lock")]
 #[derive(Debug)]
 pub struct RWLock<'a> {
@@ -70,17 +80,17 @@ pub struct RWLock<'a> {
 
 #[cfg(feature = "impl_lock")]
 impl<'a> RWLock<'a> {
-    /// Mask to check if we're holding a READ lock
-    const HOLDING_R: u8 = 0b01111111;
-    /// Mask to check if we're holding a WRITE lock
-    const HOLDING_W: u8 = 0b10000000;
-
     /// Mask to check if the lock is initialized
     pub const INITIALIZE_MASK: u32 = 255 << 24;
     /// Mask to check if it's locked for WRITING
     pub const WRITE_LOCK_MASK: u32 = 0b1 << 31;
     /// Mask to check if it's locked for READING
     pub const READ_LOCK_MASK: u32 = !Self::INITIALIZE_MASK;
+
+    /// Internal constant to check if we hold a write lock internally
+    const HOLDING_W: u8 = 0b10000000;
+    /// internal constant to check if we hold a read lock internally
+    const HOLDING_R: u8 = !Self::HOLDING_W;
 
     /// Construct a lock from existing pointers.
     /// This is meant to be used with some external mechanism to allow reading and writing lock state directly to and
@@ -116,13 +126,13 @@ impl<'a> RWLock<'a> {
     }
 
     /// Mark this lock as initialized. This will clear any existing lock state, so make sure no locks are taken.
-    /// The last byte is left as-is, so it is possible to store custom data before initialization.
     /// The choice to clear all locks upon setting the init state was made to accommodate uses of
     /// [`Self::from_existing`] where it's reasonable to assume no locks are taken or the code using it handles the
     /// situation where the locks are cleared internally.
     pub fn set_init(&self) {
         fence(Ordering::AcqRel);
-        _ = self.chunk.compare_exchange(Self::INITIALIZE_MASK, 0, Ordering::Release, Ordering::Relaxed);
+        self.chunk.store(0, Ordering::Release);
+        self.current_lock.store(0, Ordering::Release);
         fence(Ordering::AcqRel);
     }
 
@@ -132,50 +142,47 @@ impl<'a> RWLock<'a> {
         self.set_init();
         self
     }
-
-    /// Takes the [`u32`] from the lock and provides it as a [`u8`] and a [`u32`] (by lack of a proper u24).
-    #[inline(always)]
-    fn split_lock(&self, lock: u32) -> (u8, u32) {
-        ((lock >> 24) as u8, lock & Self::READ_LOCK_MASK)
-    }
-
-    /// Takes 4 [`u8`]s and packs them together into a [`u32`] to shove them into the lock.
-    #[inline(always)]
-    fn merge_lock(&self, bytes: (u8, u32)) -> u32 {
-        ((bytes.0 as u32) << 24) | bytes.1
-    }
 }
 
+#[cfg(feature = "impl_lock")]
 /// Implements a good enough implementation of a lock for MMFs
 impl<'a> MMFLock for RWLock<'a> {
-    /// Check if this lock has been initialized at all
+    /// Check if this lock has been initialized at all.
+    ///
+    /// Regardless of locking state, and abuse of the 7 empty bits, a lock _should_ not have all bits on the first byte
+    /// set to one. If it does, either the lock isn't initialized, or the user is not being very smart.
     #[inline(always)]
     fn initialized(&self) -> bool {
         fence(Ordering::AcqRel);
         (self.chunk.load(Ordering::Acquire) & Self::INITIALIZE_MASK) < Self::INITIALIZE_MASK
+            || self.current_lock.load(Ordering::Acquire) < 255
     }
 
+    /// Check if the lock is held for reading. This should only prevent new writelocks.
     #[inline(always)]
     fn readlocked(&self) -> bool {
         fence(Ordering::AcqRel);
-        let cur = (self.current_lock.load(Ordering::Acquire) & Self::HOLDING_R) == Self::HOLDING_R;
-        cur || (self.chunk.load(Ordering::Acquire) & Self::READ_LOCK_MASK) > 0
+        (self.chunk.load(Ordering::Acquire) & Self::READ_LOCK_MASK) > 0
+            || (self.current_lock.load(Ordering::Acquire) & Self::HOLDING_R) > 0
     }
 
+    /// Check if the lock is held for writing. This should prevent ALL other locking operations.
     #[inline(always)]
     fn writelocked(&self) -> bool {
         fence(Ordering::AcqRel);
-        let cur = (self.current_lock.load(Ordering::Acquire) & Self::HOLDING_W) == Self::HOLDING_W;
-        cur || (self.chunk.load(Ordering::Acquire) & Self::WRITE_LOCK_MASK) > 0
+        (self.chunk.load(Ordering::Acquire) & Self::WRITE_LOCK_MASK) == Self::WRITE_LOCK_MASK
+            || (self.current_lock.load(Ordering::Acquire) & Self::HOLDING_W) == Self::HOLDING_W
     }
 
+    /// Check if the lock is held at all.
     #[inline(always)]
     fn locked(&self) -> bool {
         fence(Ordering::AcqRel);
-        let cur = self.current_lock.load(Ordering::Acquire) > 0;
-        cur || self.chunk.load(Ordering::Acquire) > 255
+        (self.chunk.load(Ordering::Acquire) & Self::INITIALIZE_MASK) < Self::INITIALIZE_MASK
+            || self.current_lock.load(Ordering::Acquire) > 0
     }
 
+    /// Increment the counter for read locks ***if and only if*** we can safely lock this for reading
     fn lock_read(&self) -> MMFResult<()> {
         if !self.initialized() {
             return Err(Error::Uninitialized);
@@ -185,8 +192,10 @@ impl<'a> MMFLock for RWLock<'a> {
             fence(Ordering::AcqRel);
             let ret = self
                 .chunk
-                .fetch_update(Ordering::AcqRel, Ordering::AcqRel, |lock| {
-                    if (lock & Self::READ_LOCK_MASK) == Self::READ_LOCK_MASK {
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |lock| {
+                    if (lock & Self::READ_LOCK_MASK) == Self::READ_LOCK_MASK
+                        || self.current_lock.load(Ordering::Acquire) == Self::HOLDING_R
+                    {
                         None
                     } else {
                         self.current_lock.fetch_add(1, Ordering::AcqRel);
@@ -200,25 +209,32 @@ impl<'a> MMFLock for RWLock<'a> {
         }
     }
 
+    /// Decrease the read lock counter if we can safely do so.
     fn unlock_read(&self) -> MMFResult<()> {
-        todo!();
         if !self.initialized() {
-            Err(Error::Uninitialized)
-        } else if self.readlocked() {
-            fence(Ordering::AcqRel);
-            let curlock = self.current_lock.load(Ordering::Acquire);
-            if (curlock & !Self::HOLDING_W) > 0 && self.current_lock.fetch_sub(1, Ordering::AcqRel) > 0 {
-                fence(Ordering::AcqRel);
-                self.chunk.fetch_sub(1, Ordering::AcqRel);
-                Ok(())
-            } else {
-                Err(Error::GeneralFailure)
-            }
+            return Err(Error::Uninitialized);
+        } else if self.writelocked() {
+            Err(Error::WriteLocked)
         } else {
-            Ok(())
+            fence(Ordering::AcqRel);
+            let ret = self
+                .chunk
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |lock| {
+                    if (lock & Self::READ_LOCK_MASK) == 0 || self.current_lock.load(Ordering::Acquire) == 0 {
+                        None
+                    } else {
+                        self.current_lock.fetch_sub(1, Ordering::AcqRel);
+                        Some(lock.max(1) - 1)
+                    }
+                })
+                .map(|_| ())
+                .map_err(|_| Error::MaxReaders);
+            fence(Ordering::AcqRel);
+            ret
         }
     }
 
+    /// Set the write lock bit to 1 if possible.
     fn lock_write(&self) -> MMFResult<()> {
         if !self.initialized() {
             Err(Error::Uninitialized)
@@ -229,35 +245,41 @@ impl<'a> MMFLock for RWLock<'a> {
         } else {
             fence(Ordering::AcqRel);
             self.chunk
-                .fetch_update(Ordering::AcqRel, Ordering::AcqRel, |lock| Some(lock | Self::WRITE_LOCK_MASK))
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |lock| {
+                    self.current_lock.fetch_or(Self::HOLDING_W, Ordering::AcqRel);
+                    Some(lock | Self::WRITE_LOCK_MASK)
+                })
                 .map(|_| ())
                 .map_err(|_| Error::GeneralFailure)
         }
     }
 
+    /// Release a write lock if we're the ones holding it
     fn unlock_write(&self) -> MMFResult<()> {
         if !self.writelocked() {
             return Ok(());
         }
-        fence(Ordering::AcqRel);
-        let curlock = self.current_lock.load(Ordering::Acquire);
-        self.current_lock.fetch_update(Ordering::AcqRel, Ordering::AcqRel, |lock| {
-            if (lock & Self::HOLDING_W) == Self::HOLDING_W {
-                Some(lock - Self::HOLDING_W)
-            } else {
-                Some(lock)
-            }
-        });
-        let mut bytes = RWLock::split_lock(1);
-        if bytes.1 != 0 {
-            bytes.1 = 0
+        if !self.initialized() {
+            Err(Error::Uninitialized)
+        } else {
+            fence(Ordering::AcqRel);
+            self.chunk
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |lock| {
+                    if (self.current_lock.load(Ordering::Acquire) & Self::HOLDING_W) == 0 {
+                        None
+                    } else {
+                        self.current_lock.fetch_xor(Self::HOLDING_W, Ordering::AcqRel);
+                        Some(lock ^ Self::WRITE_LOCK_MASK)
+                    }
+                })
+                .map(|_| ())
+                .map_err(|_| Error::GeneralFailure)
         }
-        self.merge_lock(bytes)
     }
 
     fn spin(&self, tries: &mut usize) -> MMFResult<bool> {
         tries.add_assign(1);
-        if self.current_locks > 0 {
+        if self.locked() {
             Ok(true)
         } else if usize::MAX.eq(tries) {
             Err(Error::LockViolation)
@@ -265,18 +287,4 @@ impl<'a> MMFLock for RWLock<'a> {
             Ok(false)
         }
     }
-}
-
-/// Takes the [`u32`] from the lock and provides it as a [`u8`] and a [`u32`] (by lack of a proper u24).
-#[cfg(feature = "impl_lock")]
-#[inline(always)]
-fn split_lock(lock: u32) -> (u8, u32) {
-    ((lock >> 24) as u8, lock & RWLock::READ_LOCK_MASK)
-}
-
-/// Takes 4 [`u8`]s and packs them together into a [`u32`] to shove them into the lock.
-#[cfg(feature = "impl_lock")]
-#[inline(always)]
-fn merge_lock(bytes: (u8, u32)) -> u32 {
-    ((bytes.0 as u32) << 24) | bytes.1
 }
