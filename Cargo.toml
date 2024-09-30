@@ -1,35 +1,29 @@
 [package]
-authors     = ["Riven Skaye <riven@tae.moe>"]
-categories  = ["filesystem", "memory-management", "os::windows-apis"]
+authors = ["Riven Skaye <riven@tae.moe>"]
+categories = ["filesystem", "memory-management", "os::windows-apis"]
 description = "A mostly safe Rust wrapper around Named Shared Memory on Windows. WIP"
-edition     = "2021"
-exclude     = [".rustfmt.toml"]
-homepage    = "https://skaye.blog/winmmf/overview"
-keywords    = ["ipc", "shared-mem", "shmem", "windows", "winmmf"]
-license     = "MPL-2.0"
-name        = "winmmf"
-readme      = "README.md"
-repository  = "https://github.com/RivenSkaye/WinMMF-rs"
-version     = "0.0.1"
+edition = "2021"
+exclude = [".rustfmt.toml"]
+homepage = "https://skaye.blog/winmmf/overview"
+keywords = ["ipc", "shared-mem", "shmem", "windows", "winmmf"]
+license = "MPL-2.0"
+name = "winmmf"
+readme = "README.md"
+repository = "https://github.com/RivenSkaye/WinMMF-rs"
+version = "0.0.2"
 
 [dependencies]
 fixedstr = {version = "0.5.7", features = ["std"]}
 microseh = "1.0"
-windows = {version = "0.58", features = [
-    "Win32_Foundation",
-    "Win32_Security",
-    "Win32_Storage",
-    "Win32_Storage_FileSystem",
-    "Win32_System_Memory"
-]}
+windows = {version = "0.58", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage", "Win32_Storage_FileSystem", "Win32_System_Memory"]}
 windows-ext = "0.0.2"
 
 [features]
-default    = ["impl_lock", "impl_mmf"]
-impl_lock  = []
-impl_mmf   = ["namespaces"]
+default = ["impl_lock", "impl_mmf"]
+impl_lock = []
+impl_mmf = ["namespaces"]
 namespaces = []
 
 [package.metadata.docs.rs]
 default-target = "x86_64-pc-windows-msvc"
-targets        = ["i686-pc-windows-msvc", "x86_64-pc-windows-msvc"]
+targets = ["i686-pc-windows-msvc", "x86_64-pc-windows-msvc"]
