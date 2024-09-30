@@ -5,7 +5,7 @@
     edition     = "2021"
     exclude     = [".rustfmt.toml"]
     homepage    = "https://skaye.blog/winmmf/overview"
-    keywords    = ["ipc", "mmap", "shared-mem", "shm", "shmem", "windows", "winmmf"]
+    keywords    = ["ipc", "shared-mem", "shmem", "windows", "winmmf"]
     license     = "MPL-2.0"
     name        = "winmmf"
     readme      = "README.md"
