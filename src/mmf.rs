@@ -354,7 +354,7 @@ impl Mmf for MemoryMappedFile {
             // We ensured this size is correct and filled out when instantiating the MMF, this is just writing the same
             // amount of bytes to the same place in memory.
             unsafe { src_ptr.copy_to(self.write_ptr, cap) };
-            Ok(self.lock.unlock_write())
+            self.lock.unlock_write()
         } else {
             Err(MMFError::Uninitialized)
         }
