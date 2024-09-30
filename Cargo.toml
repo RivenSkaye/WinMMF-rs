@@ -29,3 +29,7 @@
     impl_lock  = []
     impl_mmf   = ["namespaces"]
     namespaces = []
+
+[package.metadata.docs.rs]
+    default-target = "x86_64-pc-windows-msvc"
+    targets        = ["i686-pc-windows-msvc", "x86_64-pc-windows-msvc"]
