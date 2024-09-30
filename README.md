@@ -6,8 +6,7 @@ This crate exists to support this IPC mechanism in Rust. With the power of [micr
 
 ## WIP CRATE, DO NOT USE
 
-This is not a joke or a drill. I hate having to add this, and I made sure the current version on crates.io does not yet compile to prevent its use.
-I need the name reserved, that is all.
+This is not a joke or a drill. I hate having to add this, and I wish `cargo publish` would allow me to upload crates that won't build.
 
 ## Supported platforms
 
