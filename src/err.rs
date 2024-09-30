@@ -1,11 +1,10 @@
 //! Errors produced and introduced in this crate, to help users figure out what went wrong.
 //!
-//! Handling these is recommended, but if you don't then either the MMF was never opened, or will be closed when the
-//! program ends.
+//! Handling these is recommended, but if you don't then either the MMF was never opened,
+//! or it will be closed when the program ends.
 
-use std::{error::Error as stderr, fmt};
+use std::{borrow::Cow, error::Error as stderr, fmt};
 use windows::core::{Error as WErr, HRESULT};
-use std::borrow::Cow;
 
 /// Errors used with Memory-Mapped Files.
 #[allow(non_camel_case_types)]
@@ -74,7 +73,11 @@ impl fmt::Display for Error {
             Self::OS_Err(c) => Cow::from(format!("E{c:02}: Generic OS Error")),
         };
 
-        write!(f, "{text}: {}", self.source().map(|e| Cow::from(e.to_string())).unwrap_or(Cow::from("occurred in this crate.")))
+        write!(
+            f,
+            "{text}: {}",
+            self.source().map(|e| Cow::from(e.to_string())).unwrap_or(Cow::from("occurred in this crate."))
+        )
     }
 }
 
