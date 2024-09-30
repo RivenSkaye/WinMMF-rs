@@ -1,3 +1,22 @@
+//! # States and Locks for MMFs
+//!
+//! These are the cursed things required to prevent you from footgunning yourself. When not using the default lock
+//! implementation, you'll need to implement locking yourself. If you're down for that, good luck. If you're not, you
+//! should read on.
+//!
+//! The [`MMFLock`] trait is all you'll really care about. It tells you the things the main
+//! [`crate::mmf::MemoryMappedFile`] wants to call so it can safely do its thing. The [`RWLock`] struct provides a way
+//! to implement that stuff, as well as some sprinkled on additions of its own relevant to how this lock was designed.
+//! Things to note are that any one instance of an [`RWLock`] (and by extension any instance of an MMF) can only ever
+//! track a maximum of 127 readers and a single writer. And those are mutually exclusive.
+//! This means, that if you want to use MMFs in a place where several things are touching the memory at the same time,
+//! you'll deal with errors. Luckily these are usually just abstractions that tell you all is well, unless things go
+//! very wrong. And in that case, good luck. [`RWLock::spin`] will be your friend, as you'd only need to handle the case
+//! where you sping more than what your native pointer size holds and you should be seeing problems long before then.
+//!
+//! No guarantees are made about the usefulness and safety of this code, and the project maintainer is not liable for
+//! any damages, be they to your PC or your (mental) health.
+
 use core::fmt;
 use std::{
     ops::AddAssign,
