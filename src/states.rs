@@ -1,8 +1,8 @@
 //! # States and Locks for MMFs
 //!
 //! These are the cursed things required to prevent you from footgunning yourself. When not using the default lock
-//! implementation, you'll need to implement locking yourself. If you're down for that, good luck. If you're not, you
-//! should read on.
+//! implementation, you'll need to implement locking yourself. If you're down for that, good luck and read on.
+//! If you're not, you can skip reading this module's documentation. Just use the `impl_lock` feature and enjoy life.
 //!
 //! The [`MMFLock`] trait is all you'll really care about. It tells you the things the main
 //! [`crate::mmf::MemoryMappedFile`] wants to call so it can safely do its thing. The [`RWLock`] struct provides a way
@@ -92,8 +92,10 @@ impl fmt::Debug for dyn MMFLock {
 #[cfg(feature = "impl_lock")]
 #[derive(Debug)]
 pub struct RWLock<'a> {
-    /// An Atomic reference. Alignment is usually not an issue considering Windows aligns views to pointers by default.
+    /// An Atomic reference to the first 8 bytes in the MemoryMappedView.
+    /// Alignment is not an issue considering Windows aligns views to pointers by default.
     chunk: &'a AtomicU32,
+    /// Current internal lock state, used to prevent us from releasing locks we don't hold.
     current_lock: AtomicU8,
 }
 
@@ -106,10 +108,12 @@ impl<'a> RWLock<'a> {
     /// Mask to check if it's locked for READING
     pub const READ_LOCK_MASK: u32 = !Self::INITIALIZE_MASK;
 
-    /// Internal constant to check if we hold a write lock internally
-    const HOLDING_W: u8 = 0b10000000;
-    /// internal constant to check if we hold a read lock internally
-    const HOLDING_R: u8 = !Self::HOLDING_W;
+    /// Bitmask to check if we're holding the write lock ourselves. One bit to rule them all.
+    pub const HOLDING_W: u8 = 0b10000000;
+    /// Bitmask for readlocks.
+    ///
+    /// Any of these mean we hold a lock, all of these means we **can't hold any more read locks**.
+    pub const HOLDING_R: u8 = !Self::HOLDING_W;
 
     /// Construct a lock from existing pointers.
     /// This is meant to be used with some external mechanism to allow reading and writing lock state directly to and
@@ -131,23 +135,26 @@ impl<'a> RWLock<'a> {
     ///
     /// ## example
     /// ```
-    /// use std::sync::atomic::AtomicU32;
-    /// use winmmf::{states::*, *};
+    /// # use std::sync::atomic::AtomicU32;
+    /// # use winmmf::{states::*, *};
+    /// # unsafe {
+    /// let bop = AtomicU32::new(0);
+    /// let ptr = bop.as_ptr();
+    /// let lock = RWLock::from_raw(ptr.cast());
+    /// lock.set_init();
+    /// // You're now free to do anything with the lock while `bop` lives
+    /// let new_ptr = bop.as_ptr();
+    /// let other_lock = RWLock::from_existing(new_ptr.cast());
     ///
-    /// unsafe {
-    ///     let bop = AtomicU32::new(0);
-    ///     let ptr = bop.as_ptr();
-    ///     let lock = RWLock::from_raw(ptr.cast());
-    ///     lock.set_init();
-    ///     // You're now free to do anything with the lock while `bop` lives
-    ///     let new_ptr = bop.as_ptr();
-    ///     let other_lock = RWLock::from_existing(new_ptr.cast());
+    /// lock.lock_write().unwrap();
     ///
-    ///     lock.lock_write().unwrap();
+    /// assert!(other_lock.writelocked());
+    /// assert!(!other_lock.readlocked());
+    /// assert!(other_lock.lock_read().is_err());
     ///
-    ///     assert!(other_lock.locked());
-    ///     assert!(other_lock.lock_read().is_err());
-    /// }
+    /// assert!(other_lock.unlock_write().is_err());
+    /// assert!(lock.unlock_write().is_ok());
+    /// # }
     /// ```
     pub unsafe fn from_existing(pointer: *mut u8) -> Self {
         if pointer.is_null() {
@@ -178,6 +185,16 @@ impl<'a> RWLock<'a> {
 
     /// Thin wrapper around [`Self::set_init`] that returns self for chaining calls.
     /// The same safety concerns apply as for `set_init`.
+    ///
+    /// ## Usage
+    /// ```
+    /// # use std::sync::atomic::AtomicU32;
+    /// # use winmmf::{states::*, *};
+    /// let bop = AtomicU32::new(0);
+    /// let ptr = bop.as_ptr();
+    /// let lock = unsafe { RWLock::from_existing(ptr.cast()).initialize() };
+    /// assert!(lock.initialized());
+    /// ```
     pub fn initialize(self) -> Self {
         self.set_init();
         self
@@ -198,7 +215,7 @@ impl<'a> MMFLock for RWLock<'a> {
             || self.current_lock.load(Ordering::Acquire) < 255
     }
 
-    /// Check if the lock is held for reading. This should only prevent new writelocks.
+    /// Check if the lock is held for reading. This should only prevent new write locks.
     #[inline(always)]
     fn readlocked(&self) -> bool {
         fence(Ordering::AcqRel);
@@ -215,6 +232,10 @@ impl<'a> MMFLock for RWLock<'a> {
     }
 
     /// Check if the lock is held at all.
+    ///
+    /// This compares using the initialization mask is done in a similar vein to niche optimizations;
+    /// it should never be possible to hold read _and_ write locks. Similarly, if we hold no internal
+    /// locks, our internal lock state is guaranteed to be zero.
     #[inline(always)]
     fn locked(&self) -> bool {
         fence(Ordering::AcqRel);
@@ -317,6 +338,11 @@ impl<'a> MMFLock for RWLock<'a> {
         }
     }
 
+    /// Very naive spinning implementation. Runs a finite amount of times.
+    ///
+    /// This spinning implementation just checks if the lock is held for as many times as it needs to. If it encounters
+    /// the upper bound of the native pointer size before the lock is released, it returns an error.
+    /// If uni taught me one thing, it would be that `while true` on locks will eventually lead to the big funny.
     fn spin(&self, tries: &mut usize) -> MMFResult<bool> {
         tries.add_assign(1);
         if self.locked() {
