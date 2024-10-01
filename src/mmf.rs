@@ -1,4 +1,4 @@
-//! Memory-Mapped Files, Rust-style
+//! # Memory-Mapped Files, Rust-style
 //!
 //! This crate contains everything you need to work with Memory-Mapped files. Or you can just roll your own and build
 //! upon the [`Mmf`] trait defined here. This module exports some utilities and ease of use items and you're entirely
@@ -108,6 +108,7 @@ macro_rules! wrap_try {
 }
 
 /// A simple struct wrapping a [Memory Mapped File](https://learn.microsoft.com/en-us/windows/win32/memory/creating-named-shared-memory).
+///
 /// It contains all the data required to create and keep alive a [`HANDLE`] to a Memory Mapped File. The [`HANDLE`] is
 /// required to create a [`MEMORY_MAPPED_VIEW_ADDRESS`] to read and write data from. In order to expose reading and
 /// writing functionality in a safe manner, these are wrapped in a safe API that prefers more short blocks of unsafe
@@ -141,8 +142,9 @@ pub struct MemoryMappedFile {
 #[cfg(feature = "impl_mmf")]
 impl MemoryMappedFile {
     /// Attempt to create a new Memory Mapped File. Or fail _graciously_ if we can't.
+    ///
     /// The size will be automatically divided into the upper and lower halves, as the function to allocate this memory
-    /// requires them to be split. The name of the file should be either one of:
+    /// requires them to be split. The name of the file should be any one of:
     ///
     /// 1. Just a filename, if the namespace is either [`Namespace::GLOBAL`] or [`Namespace::LOCAL`]
     /// 2. A namespaced filename if using [`Namespace::CUSTOM`] and you know what you're doing
@@ -153,7 +155,7 @@ impl MemoryMappedFile {
     /// on your own.
     ///
     /// The size MUST be a non-zero value; allocating zero bytes errors on the OS end of things. Allocating too much
-    /// will make a large part of the file inaccessible to other code trying to read it from a 32-bit process.
+    /// will make a part of the file inaccessible to other code trying to read it from a 32-bit process.
     /// The total size allocated will be 4 bytes larger than the specified size, but only after checking the input size
     /// is non-zero.
     pub fn new(size: NonZeroUsize, name: &str, namespace: Namespace) -> MMFResult<Self> {
@@ -297,6 +299,7 @@ impl Mmf for MemoryMappedFile {
     }
 
     /// See the documentation for [Self::read()], except this takes a buffer to write to.
+    ///
     /// If the buffer is smaller than the MMF, data will be truncated.
     fn read_to_buf(&self, buffer: &mut Vec<u8>, count: usize) -> Result<(), MMFError> {
         let to_read = if count == 0 { buffer.capacity().min(self.size) } else { count };
@@ -308,7 +311,7 @@ impl Mmf for MemoryMappedFile {
                 return Err(e);
             }
             // safety: memory may overlap with copy_to. With the size check, we also ensure we don't copy more bytes
-            // than what fits. in the target Vec. If someone gave us a dirty Vec, that's on them. Notably, that would
+            // than what fits in the target Vec. If someone gave us a dirty Vec, that's on them. Notably, that would
             // cause the same kind of problems in safe code, because a dirty Vec violates soundness.
             unsafe {
                 buffer.set_len(to_read);
@@ -322,6 +325,7 @@ impl Mmf for MemoryMappedFile {
     }
 
     /// Attempt to write a complete buffer into the MMF. Uses pointers and memcpy to be fast.
+    ///
     /// This function errors only if the lock could not be acquired or when trying to write more data than fits. Writing
     /// more data than the MMF can hold is UB so this is prevented by erroring out instead. If the input buffer is
     /// smaller than the destination file, the end is zeroed out. The start of the buffer is also padded by the lock
@@ -376,7 +380,8 @@ impl From<MEMORY_MAPPED_VIEW_ADDRESS> for MemoryMappedView {
 
 /// Handle unmapping the view because we're nice like that.
 impl MemoryMappedView {
-    /// Unmaps the view.
+    /// Unmaps the view to release resources.
+    ///
     /// There is currently no way to undo this, short of closing the MMF.
     /// If you need to do or change something that causes unmapping of the view, and you do need to keep the relevant
     /// data, it's best to open a new MMF before closing it. When the last handle to an MMF closes, it's destroyed.
