@@ -18,7 +18,7 @@ pub enum Error {
     /// Uninitialized, who's to say what's in there?
     /// Although MMFs created in this crate will just be nulls.
     Uninitialized = 2,
-    /// 255 concurrent readers, wtf
+    /// 127 concurrent readers, wtf
     MaxReaders = 3,
     /// It's too big ~~onii-chan~~
     NotEnoughMemory = 4,
