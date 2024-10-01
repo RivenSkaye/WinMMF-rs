@@ -12,7 +12,7 @@
 //! This means, that if you want to use MMFs in a place where several things are touching the memory at the same time,
 //! you'll deal with errors. Luckily these are usually just abstractions that tell you all is well, unless things go
 //! very wrong. And in that case, good luck. [`RWLock::spin`] will be your friend, as you'd only need to handle the case
-//! where you sping more than what your native pointer size holds and you should be seeing problems long before then.
+//! where you spin more than what your native pointer size holds and you should be seeing problems long before then.
 //!
 //! No guarantees are made about the usefulness and safety of this code, and the project maintainer is not liable for
 //! any damages, be they to your PC or your (mental) health.
