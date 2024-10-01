@@ -264,7 +264,7 @@ impl<'a> MMFLock for RWLock<'a> {
                         None
                     } else {
                         self.current_lock.fetch_sub(1, Ordering::AcqRel);
-                        Some(lock.max(1) - 1)
+                        Some(lock - 1)
                     }
                 })
                 .map(|_| ())
