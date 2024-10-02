@@ -4,22 +4,20 @@ When working with Windows, there isn't a really ergonomic `shm` or `mmap` implem
 
 This crate exists to support this IPC mechanism in Rust. With the power of [microSEH](https://github.com/sonodima/microseh) to handle Structured Exception [Hissy fits](https://www.merriam-webster.com/dictionary/hissy%20fit) and some well thought out ways to make using this as safe as possible, it should be fine to use. I'm currently working on getting this production ready for some real-world use cases and slowly expanding it to support more use cases. It's very much still a WIP crate though.
 
-## WIP CRATE, DO NOT USE
-
-This is not a joke or a drill. I hate having to add this, and I wish `cargo publish` would allow me to upload crates that won't build.
+This crate is currently in a state of baby steps. I've done some basic testing and it mostly works, but there's no full test suite yet. I'm also having some trouble figuring out what the best approach would be for this, as it'd require either multithreading and opening several handles to the same MMF, or permission elevation.  
+Contributors are always welcome. Even more so if they can help cover what's lacking here, such as implementing a full test suite and implementing more architectures.
 
 ## Supported platforms
 
 This crate only supports Windows. Nothing else uses this mechanic for shared memory to the best of my knowledge and it sounds painful to even test it. If you find it works in other places, let me know and I'll list it!  
-If there's something you'd like to see changed, open an issue explaining why and it'll get looked at. By the way, mapping more than a few gigs already crashes AMD64 builds, so I really doubt there's any reason to use 64-bit integers even there.
+If there's something you'd like to see changed, open an issue explaining why and it'll get looked at.
 
-| Architecture |   OS    | Supported | Works |                           Notes                                                                               |
-|--------------|---------|-----------|-------|---------------------------------------------------------------------------------------------------------------|
-| x86          | Windows | Yes       | Yes   | Just Works:tm:.                                                                                               |
-| x86_64/AMD64 | Windows | Yes       | Yes   | Currently limited to 32-bit sizes, `u32::MAX` bytes should actually be enough for most use cases.             |
-| ARM          | Windows | No        | Maybe | Have not tested this, nor do I have a system to test with. If someone can test, I'd gladly mark it supported. |
-| Other        | Windows | No        | Maybe | I am not willing to help support things I can't access. If someone else wants to maintain support, feel free. |
-| *            | *NIX    | lolnope   | No    | This entire crate is for wrapping the _Windows_ API for sharing memory. Linux already has a good `shmem`.     |
+| Architecture |   OS    | Officially Supported | Works |                           Notes                                                                           |
+|--------------|---------|----------------------|-------|-----------------------------------------------------------------------------------------------------------|
+| x86          | Windows | Yes                  | Yes   | Just Works™.                                                                                              |
+| x86_64/AMD64 | Windows | Yes                  | Yes   | Just Works™.                                                                                              |
+| ARM          | Windows | No hardware          | Maybe | Have not tested this, nor do I have a system to test with. Contributors with Windows ARM machines wanted. |
+| Other        | Windows | No                   | Maybe | I am not able to help support things I can't access. Community support would be welcome and listed here.  |
 
 ## Goals
 
