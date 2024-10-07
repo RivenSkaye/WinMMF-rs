@@ -7,10 +7,10 @@
 //! get things working.
 //!
 //! The internal implementation is built entirely around using [`fixedstr::zstr`] to keep references to strings alive
-//! because for some reason everything goes to hell if you don't. MicroSEH is just as much a core component here, and
-//! a macro is available for wrapping things that return errors from the windows crate.
-//! Take a look at [`wrap_try!`] for more info.
-//! ~~wdym don't pass refs to data you're dropping across the ffi boundary?~~
+//! because for some reason everything goes to hell if you don't. [`microseh`] is just as much a core component here, as
+//! it's a requirement to get the OS to play nice in the event of something going wrong and a structured exception being
+//! thrown. This **does** mean that you, the consumer of this library, must ensure a clean exit and teardown upon
+//! failure. No, a [`panic!`] does not suffice, ensure things get dropped and that the OS doesn't unwind your ass.
 //!
 //! While it would be possible to split things out further, using this much to ensure everything works smoothly helps
 //! keeping this maintanable and usable. If you need a more minimal implementation, feel free to yank whatever you need
@@ -25,7 +25,7 @@ use microseh::try_seh;
 use windows::{
     core::Error as WErr,
     Win32::{
-        Foundation::{SetLastError, HANDLE, WIN32_ERROR},
+        Foundation::HANDLE,
         System::Memory::{UnmapViewOfFile, MEMORY_MAPPED_VIEW_ADDRESS},
     },
 };
@@ -86,25 +86,6 @@ pub trait Mmf {
     fn read_to_buf(&self, buffer: &mut Vec<u8>, count: usize) -> MMFResult<()>;
     /// Write data to the MMF.
     fn write(&self, buffer: &[u8]) -> MMFResult<()>;
-}
-
-/// Replace the boilerplate for every time we need to call `try_seh`.
-///
-/// The function **must** return a result that can be converted into a [`MMFResult`]. If you're ever not certain it
-/// does, manually wrap it in an `Ok()`. The resulting boilerplate is literally all it takes to further process the
-/// code. The choice for a result is entirely based on the fact that most `windows-rs` calls return results, so it's
-/// generally less effort this way.
-macro_rules! wrap_try {
-    ($func:expr, $res:ident) => {{
-        let mut $res: Result<_, _> = Err(WErr::empty());
-        let res2 = try_seh(|| $res = $func);
-        if let Err(e) = res2 {
-            // make sure the error code is set system-side
-            unsafe { SetLastError(WIN32_ERROR(e.code() as u32)) };
-            return Err(WErr::from_win32().into());
-        }
-        $res.map_err(MMFError::from)
-    }};
 }
 
 /// A simple struct wrapping a [Memory Mapped File](https://learn.microsoft.com/en-us/windows/win32/memory/creating-named-shared-memory).
@@ -169,17 +150,19 @@ impl MemoryMappedFile {
         // fuckin' windows
         let mmf_name = PCSTR::from_raw(init_name.to_ptr());
         let (dw_low, dw_high) = (size.get() + 4).split();
-
+        /*
         // Safety: handled through microSEH and we check the last error status later. Failure here is failure there.
         let handle = wrap_try!(
             unsafe { CreateFileMappingA(INVALID_HANDLE_VALUE, None, PAGE_READWRITE, dw_high, dw_low, mmf_name) },
             hndl
-        )?;
+        )?;*/
+        let handle = try_seh(|| unsafe {
+            CreateFileMappingA(INVALID_HANDLE_VALUE, None, PAGE_READWRITE, dw_high, dw_low, mmf_name)
+        })??;
 
         // Unsafe because `MapViewOfFile` is marked as such, but it should return a NULL pointer when failing; and set
         // the last error state correspondingly.
-        let map_view =
-            wrap_try!(unsafe { Ok(MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size.get() + 4)) }, mapview)?;
+        let map_view = try_seh(|| unsafe { MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size.get() + 4) })?;
 
         // Explicit check to make sure we have something that works (later is now)
         if unsafe { GetLastError() }.is_err() {
@@ -223,12 +206,11 @@ impl MemoryMappedFile {
         let (dw_low, dw_high) = (size.get() + 4).split();
 
         // Safety: Issues here are issues later, and we check for them later.
-        let handle = wrap_try!(unsafe { OpenFileMappingA(FILE_MAP_ALL_ACCESS.0, false, mmf_name) }, hndl)?;
+        let handle = try_seh(|| unsafe { OpenFileMappingA(FILE_MAP_ALL_ACCESS.0, false, mmf_name) })??;
 
         // Unsafe because `MapViewOfFile` is marked as such, but it should return a NULL pointer when failing; and set
         // the last error state correspondingly.
-        let map_view =
-            wrap_try!(unsafe { Ok(MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size.get() + 4)) }, mmva)?;
+        let map_view = try_seh(|| unsafe { MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size.get() + 4) })?;
 
         // Explicit check to make sure we have something that works (later is now)
         if unsafe { GetLastError() }.is_err() {
@@ -271,7 +253,7 @@ impl MemoryMappedFile {
     /// Close the MMF. Don't worry about calling this, it's handled in [`Drop`].
     pub fn close(&self) -> MMFResult<()> {
         // Safety: microSEH handles the OS side of this error, and the match handles this end.
-        match wrap_try!(unsafe { CloseHandle(self.handle) }, res) {
+        match try_seh(|| unsafe { CloseHandle(self.handle) })?.map_err(MMFError::from) {
             Err(MMFError::OS_OK(_)) | Ok(_) => Ok(()),
             err => err.inspect_err(|e| eprintln!("Error closing MMF's handle: {:#?}", e)),
         }
@@ -386,7 +368,7 @@ impl MemoryMappedView {
     /// If you need to do or change something that causes unmapping of the view, and you do need to keep the relevant
     /// data, it's best to open a new MMF before closing it. When the last handle to an MMF closes, it's destroyed.
     fn unmap(&self) -> MMFResult<()> {
-        match wrap_try!(unsafe { UnmapViewOfFile(self.address) }, res) {
+        match try_seh(|| unsafe { UnmapViewOfFile(self.address) })?.map_err(MMFError::from) {
             Err(MMFError::OS_OK(_)) | Ok(_) => Ok(()),
             err => err.inspect_err(|e| eprintln!("Error unmapping the view of the MMF: {:#?}", e)),
         }

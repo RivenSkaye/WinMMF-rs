@@ -3,6 +3,7 @@
 //! Handling these is recommended, but if you don't then either the MMF was never opened,
 //! or it will be closed when the program ends.
 
+use microseh::Exception;
 use std::{borrow::Cow, error::Error as stderr, fmt};
 use windows::core::{Error as WErr, HRESULT};
 
@@ -43,18 +44,45 @@ impl stderr for Error {
     }
 }
 
+impl From<HRESULT> for Error {
+    fn from(value: HRESULT) -> Self {
+        match value {
+            HRESULT(30) => Self::ReadLocked,
+            HRESULT(19) => Self::WriteLocked,
+            HRESULT(8) => Self::NotEnoughMemory,
+            HRESULT(9) => Self::Uninitialized,
+            HRESULT(2) => Self::MMF_NotFound,
+            HRESULT(33) => Self::LockViolation,
+            HRESULT(0) => Self::OS_OK(value.into()),
+            _ => Self::OS_Err(value.into()),
+        }
+    }
+}
+
+impl From<i32> for Error {
+    fn from(value: i32) -> Self {
+        Self::from(HRESULT(value))
+    }
+}
+
+impl From<u32> for Error {
+    fn from(value: u32) -> Self {
+        // pub struct HRESULT(pub i32) is `repr(transparent)`
+        Self::from(value as i32)
+    }
+}
+
 impl From<WErr> for Error {
     fn from(value: WErr) -> Self {
-        match value.code().into() {
-            HRESULT(0) => Self::OS_OK(value),
-            HRESULT(19) => Self::WriteLocked,
-            HRESULT(30) => Self::ReadLocked,
-            HRESULT(33) => Self::LockViolation,
-            HRESULT(8) => Self::NotEnoughMemory,
-            HRESULT(2) => Self::MMF_NotFound,
-            HRESULT(9) => Self::Uninitialized,
-            _ => Self::OS_Err(value),
-        }
+        // Extract the inner HRESULT
+        Self::from(value.code())
+    }
+}
+
+impl From<Exception> for Error {
+    fn from(value: Exception) -> Self {
+        // microseh::Exception::ExceptionCode is a `repr(u32)` enum. This is safe to cast.
+        Self::from(HRESULT(value.code() as u32 as i32))
     }
 }
 
