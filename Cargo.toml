@@ -10,7 +10,7 @@
     name        = "winmmf"
     readme      = "README.md"
     repository  = "https://github.com/RivenSkaye/WinMMF-rs"
-    version     = "0.1.0"
+    version     = "0.1.1"
 
 [dependencies]
     fixedstr = {version = "0.5.8", features = ["std"]}
@@ -22,7 +22,7 @@
         "Win32_Storage_FileSystem",
         "Win32_System_Memory"
     ]}
-    windows-ext = "0.0.2"
+    windows-ext = "0.0.3"
 
 [features]
     default    = ["impl_lock", "impl_mmf"]
