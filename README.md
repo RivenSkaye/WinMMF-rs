@@ -12,12 +12,12 @@ Contributors are always welcome. Even more so if they can help cover what's lack
 This crate only supports Windows. Nothing else uses this mechanic for shared memory to the best of my knowledge and it sounds painful to even test it. If you find it works in other places, let me know and I'll list it!  
 If there's something you'd like to see changed, open an issue explaining why and it'll get looked at.
 
-| Architecture |   OS    | Officially Supported | Works |                           Notes                                                                           |
-|--------------|---------|----------------------|-------|-----------------------------------------------------------------------------------------------------------|
-| x86          | Windows | Yes                  | Yes   | Just Works™.                                                                                              |
-| x86_64/AMD64 | Windows | Yes                  | Yes   | Just Works™.                                                                                              |
-| ARM          | Windows | No hardware          | Maybe | Have not tested this, nor do I have a system to test with. Contributors with Windows ARM machines wanted. |
-| Other        | Windows | No                   | Maybe | I am not able to help support things I can't access. Community support would be welcome and listed here.  |
+| Architecture | Officially Supported | Works |                           Notes                                                                           |
+|--------------|----------------------|-------|-----------------------------------------------------------------------------------------------------------|
+| x86          | Yes                  | Yes   | Just Works™.                                                                                              |
+| x86_64/AMD64 | Yes                  | Yes   | Just Works™.                                                                                              |
+| ARM          | No hardware          | Maybe | Have not tested this, nor do I have a system to test with. Contributors with Windows ARM machines wanted. |
+| Other        | No                   | Maybe | I am not able to help support things I can't access. Community support would be welcome and listed here.  |
 
 ## Goals
 
