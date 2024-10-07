@@ -150,12 +150,8 @@ impl MemoryMappedFile {
         // fuckin' windows
         let mmf_name = PCSTR::from_raw(init_name.to_ptr());
         let (dw_low, dw_high) = (size.get() + 4).split();
-        /*
+
         // Safety: handled through microSEH and we check the last error status later. Failure here is failure there.
-        let handle = wrap_try!(
-            unsafe { CreateFileMappingA(INVALID_HANDLE_VALUE, None, PAGE_READWRITE, dw_high, dw_low, mmf_name) },
-            hndl
-        )?;*/
         let handle = try_seh(|| unsafe {
             CreateFileMappingA(INVALID_HANDLE_VALUE, None, PAGE_READWRITE, dw_high, dw_low, mmf_name)
         })??;
