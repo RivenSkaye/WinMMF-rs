@@ -30,6 +30,7 @@ use windows::{
     },
 };
 
+use std::cell::Cell;
 #[cfg(feature = "impl_mmf")]
 use std::{fmt, num::NonZeroUsize};
 #[cfg(feature = "impl_mmf")]
@@ -118,6 +119,7 @@ pub struct MemoryMappedFile<LOCK: MMFLock> {
     map_view: Option<MemoryMappedView>,
     /// The pointer we can actually write into without fucking up the lock
     write_ptr: *mut u8,
+    closed: Cell<bool>,
 }
 
 #[cfg(feature = "impl_mmf")]
@@ -183,6 +185,7 @@ impl<LOCK: MMFLock> MemoryMappedFile<LOCK> {
             map_view: Some(map_view.into()),
             lock,
             write_ptr,
+            closed: Cell::new(false),
         })
     }
 
@@ -225,6 +228,7 @@ impl<LOCK: MMFLock> MemoryMappedFile<LOCK> {
             lock,
             map_view: Some(map_view.into()),
             write_ptr,
+            closed: Cell::new(false),
         })
     }
 
@@ -248,6 +252,7 @@ impl<LOCK: MMFLock> MemoryMappedFile<LOCK> {
 
     /// Close the MMF. Don't worry about calling this, it's handled in [`Drop`].
     pub fn close(&self) -> MMFResult<()> {
+        self.closed.set(true);
         // Safety: microSEH handles the OS side of this error, and the match handles this end.
         match try_seh(|| unsafe { CloseHandle(self.handle) })?.map_err(MMFError::from) {
             Err(MMFError::OS_OK(_)) | Ok(_) => Ok(()),
@@ -271,6 +276,9 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
     ///   maximum amount of readers has been reached (this should not happen assuming all implementations are clean).
     #[inline]
     fn read(&self, count: usize) -> Result<Vec<u8>, MMFError> {
+        if self.closed.get() {
+            return Err(MMFError::MMF_NotFound);
+        }
         let mut buf = Vec::with_capacity(self.size);
         self.read_to_buf(&mut buf, count)?;
         Ok(buf)
@@ -280,6 +288,9 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
     ///
     /// If the buffer is smaller than the MMF, data will be truncated.
     fn read_to_buf(&self, buffer: &mut Vec<u8>, count: usize) -> Result<(), MMFError> {
+        if self.closed.get() {
+            return Err(MMFError::MMF_NotFound);
+        }
         let to_read = if count == 0 { buffer.capacity().min(self.size) } else { count };
         if let Some(_) = &self.map_view {
             if !self.lock.initialized() {
@@ -315,6 +326,9 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
     /// - 9: Invalid block; the lock is telling us this data has not yet been initialized.
     /// - All errors from [Self::read()] as a read is required to update the lock.
     fn write(&self, buffer: &[u8]) -> MMFResult<()> {
+        if self.closed.get() {
+            return Err(MMFError::MMF_NotFound);
+        }
         let cap = buffer.len().min(self.size);
         if cap < buffer.len() {
             return Err(MMFError::NotEnoughMemory);
