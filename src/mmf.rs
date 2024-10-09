@@ -286,18 +286,23 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
 
     /// See the documentation for [Self::read()], except this takes a buffer to write to.
     ///
-    /// If the buffer is smaller than the MMF, data will be truncated.
+    /// If the count is 0, the entire MMF will be read into the buffer. If the buffer is smaller than the amount of data
+    /// to be read, it _will be grown_ to fit the requested data, using [`Vec::reserve_exact`].
     fn read_to_buf(&self, buffer: &mut Vec<u8>, count: usize) -> Result<(), MMFError> {
         if self.closed.get() {
             return Err(MMFError::MMF_NotFound);
         }
-        let to_read = if count == 0 { buffer.capacity().min(self.size) } else { count };
+        let buf_cap = buffer.capacity();
+        let to_read = buf_cap.min(if count == 0 { self.size } else { count });
         if let Some(_) = &self.map_view {
             if !self.lock.initialized() {
                 return Err(MMFError::Uninitialized);
             }
             if let Err(e) = self.lock.lock_read() {
                 return Err(e);
+            }
+            if buf_cap < to_read {
+                buffer.reserve_exact(to_read - buf_cap);
             }
             // safety: memory may overlap with copy_to. With the size check, we also ensure we don't copy more bytes
             // than what fits in the target Vec. If someone gave us a dirty Vec, that's on them. Notably, that would
