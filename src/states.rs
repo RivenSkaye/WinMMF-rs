@@ -5,10 +5,10 @@
 //! If you're not, you can skip reading this module's documentation. Just use the `impl_lock` feature and enjoy life.
 //!
 //! The [`MMFLock`] trait is all you'll really care about. It tells you the things the main
-//! [`crate::mmf::MemoryMappedFile`] wants to call so it can safely do its thing. The [`RWLock`] struct provides a way
-//! to implement that stuff, as well as some sprinkled on additions of its own relevant to how this lock was designed.
-//! Things to note are that any one instance of an [`RWLock`] (and by extension any instance of an MMF) can only ever
-//! track a maximum of 127 readers and a single writer. And those are mutually exclusive.
+//! [`MemoryMappedFile`][crate::mmf::MemoryMappedFile] wants to call so it can safely do its thing. The [`RWLock`]
+//! struct provides a way to implement that stuff, as well as some sprinkled on additions of its own relevant to how
+//! this lock was designed. Things to note are that any one instance of an [`RWLock`] (and by extension any instance of
+//! an MMF) can only ever track a maximum of 127 readers and a single writer. And those are mutually exclusive.
 //! This means, that if you want to use MMFs in a place where several things are touching the memory at the same time,
 //! you'll deal with errors. Luckily these are usually just abstractions that tell you all is well, unless things go
 //! very wrong. And in that case, good luck. [`RWLock::spin`] will be your friend, as you'd only need to handle the case
@@ -78,7 +78,8 @@ impl fmt::Debug for dyn MMFLock {
 /// - The remaining three are for read lock counting. Beware though, that while this allows you to have a count of up to
 ///   16_777_215 locks, the OS limits all processes to that number of open handles. This means nobody should ever be
 ///   remotely close to the actual limit. It also means that if for some reason there _are_ (2^24) - 1 locks, we get to
-///   call upon "implementation defined results" which are implemented here as [crate::err::Error::MaxReaders]. Enjoy!
+///   call upon "implementation defined results" which are implemented here as
+///   [`Error::MaxReaders`][crate::err::Error::MaxReaders]. Enjoy!
 ///
 /// To prevent a series of potentially problematic results, every unique instance of this lock should track what it
 /// holds internally as well. This also allows for every unique lock instance to limit the amount of locks held to
