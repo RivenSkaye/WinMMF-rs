@@ -168,8 +168,7 @@ impl<LOCK: MMFLock> MemoryMappedFile<LOCK> {
         }
 
         // Waste some time to ensure the memory is zeroed out - I learned the importance of this the hard way.
-        let mut zeroing = Vec::<u8>::new();
-        zeroing.resize(size.get() + 4, 0);
+        let zeroing = vec![0; size.get() + 4];
         // safety: we're writing zeroes into memory we just got back from the OS
         unsafe { std::ptr::copy(zeroing.as_ptr(), map_view.Value.cast(), zeroing.len()) };
 
@@ -294,13 +293,12 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
         }
         let buf_cap = buffer.capacity();
         let to_read = buf_cap.min(if count == 0 { self.size } else { count });
-        if let Some(_) = &self.map_view {
+        if self.map_view.is_some() {
             if !self.lock.initialized() {
                 return Err(MMFError::Uninitialized);
             }
-            if let Err(e) = self.lock.lock_read() {
-                return Err(e);
-            }
+            self.lock.lock_read()?;
+
             if buf_cap < to_read {
                 buffer.reserve_exact(to_read - buf_cap);
             }
@@ -347,10 +345,8 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
         if self.lock.writelocked() {
             return Err(MMFError::WriteLocked);
         }
-        if let Some(_) = &self.map_view {
-            if let Err(_) = self.lock.lock_write() {
-                return Err(MMFError::LockViolation);
-            }
+        if self.map_view.is_some() {
+            self.lock.lock_write()?;
             let src_ptr = buffer.as_ptr();
             // We ensured this size is correct and filled out when instantiating the MMF, this is just writing the same
             // amount of bytes to the same place in memory.

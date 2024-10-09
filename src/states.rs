@@ -26,6 +26,7 @@ use std::{
 use super::err::{Error, MMFResult};
 
 /// Blanket trait for implementing locks to be used with MMFs.
+///
 /// The default implementation applied to [`RWLock`] can be used with a custom MMF implementation,
 /// but either way would require accounting for the fact this lock is designed to be stored inside the MMF.
 /// From the lock's point of view, a pointer to some other u32 would work just as well but this requires some other
@@ -50,9 +51,11 @@ pub trait MMFLock {
     /// Nuke all existing write locks as there can only be one, legally.
     fn unlock_write(&self) -> MMFResult<()>;
     fn spin(&self, tries: &mut usize) -> MMFResult<bool>;
+    #[allow(clippy::missing_safety_doc)]
     unsafe fn from_existing(pointer: *mut u8) -> Self
     where
         Self: Sized;
+    #[allow(clippy::missing_safety_doc)]
     unsafe fn from_raw(pointer: *mut u8) -> Self
     where
         Self: Sized;
@@ -78,6 +81,7 @@ impl fmt::Debug for dyn MMFLock {
 }
 
 /// Packed binary data to represent the locking state of the MMF.
+///
 /// The wrapper implementation must set these bytes depending on the situation and actions being taken.
 /// Due to the fact Windows only guarantees atomic operations on 32-bit ints, (and 64-bit ones only for 64-bit
 /// applications on 64-bit Windows), the safest option here is to ensure we're using a 32-bit Atomic.
@@ -111,7 +115,7 @@ pub struct RWLock<'a> {
 }
 
 #[cfg(feature = "impl_lock")]
-impl<'a> RWLock<'a> {
+impl RWLock<'_> {
     /// Mask to check if the lock is initialized
     pub const INITIALIZE_MASK: u32 = 255 << 24;
     /// Mask to check if it's locked for WRITING
@@ -129,13 +133,15 @@ impl<'a> RWLock<'a> {
 
 #[cfg(feature = "impl_lock")]
 /// Implements a good enough implementation of a lock for MMFs
-impl<'a> MMFLock for RWLock<'a> {
+impl MMFLock for RWLock<'_> {
     /// Construct a lock from existing pointers.
+    ///
     /// This is meant to be used with some external mechanism to allow reading and writing lock state directly to and
     /// from some larger struct. The lock will claim the first four bytes behind this pointer; if you do not intend to
     /// have the lock state at the start of the data, make sure to offset the pointer provided.
     ///
-    /// SAFETY: there is no way of ensuring this pointer is valid after the first byte without moving out of bounds when
+    /// # Safety
+    /// there is no way of ensuring this pointer is valid after the first byte without moving out of bounds when
     /// it's not. Users should take care to ensure the first 4 bytes in the pointer are valid. A lock created through
     /// this method provides NO guarantees about the lock states and assumes the user has zeroed out all values behind
     /// it if necessary. This initializer is meant to be used with a pointer for an existing lock, or a pointer whose
@@ -179,6 +185,8 @@ impl<'a> MMFLock for RWLock<'a> {
     }
 
     /// Similar to [`Self::from_existing`], except it clears all state and ensures [`Self::initialized`] returns false.
+    ///
+    /// # Safety
     /// The same safety bounds apply as for `from_existing` with the exception of poisoned lock risks. It does mean,
     /// however, that it invalidates any other locks that use the same pointer and clears any data.
     unsafe fn from_raw(pointer: *mut u8) -> Self {
@@ -188,6 +196,7 @@ impl<'a> MMFLock for RWLock<'a> {
     }
 
     /// Mark this lock as initialized. This will clear any existing lock state, so make sure no locks are taken.
+    ///
     /// The choice to clear all locks upon setting the init state was made to accommodate uses of
     /// [`Self::from_existing`] where it's reasonable to assume no locks are taken or the code using it handles the
     /// situation where the locks are cleared internally.
@@ -199,6 +208,8 @@ impl<'a> MMFLock for RWLock<'a> {
     }
 
     /// Thin wrapper around [`Self::set_init`] that returns self for chaining calls.
+    ///
+    /// # Safety
     /// The same safety concerns apply as for `set_init`.
     ///
     /// ## Usage
@@ -257,7 +268,7 @@ impl<'a> MMFLock for RWLock<'a> {
     /// Increment the counter for read locks ***if and only if*** we can safely lock this for reading
     fn lock_read(&self) -> MMFResult<()> {
         if !self.initialized() {
-            return Err(Error::Uninitialized);
+            Err(Error::Uninitialized)
         } else if self.writelocked() {
             Err(Error::WriteLocked)
         } else {
@@ -284,7 +295,7 @@ impl<'a> MMFLock for RWLock<'a> {
     /// Decrease the read lock counter if we can safely do so.
     fn unlock_read(&self) -> MMFResult<()> {
         if !self.initialized() {
-            return Err(Error::Uninitialized);
+            Err(Error::Uninitialized)
         } else if self.writelocked() {
             Err(Error::WriteLocked)
         } else {
