@@ -26,7 +26,7 @@ use std::{
 use super::err::{Error, MMFResult};
 
 /// Blanket trait for implementing locks to be used with MMFs.
-/// The default implementation applied to [`RWLock`] can be used with a custom MMF implementation and vice-versa,
+/// The default implementation applied to [`RWLock`] can be used with a custom MMF implementation,
 /// but either way would require accounting for the fact this lock is designed to be stored inside the MMF.
 /// From the lock's point of view, a pointer to some other u32 would work just as well but this requires some other
 /// form of synchronizing access accross thread and application boundaries.
@@ -37,7 +37,7 @@ pub trait MMFLock {
     fn initialized(&self) -> bool;
     /// Checks if this lock is readlocked. Does not indicate writelock status; use [`MMFLock::writelocked`] for that.
     fn readlocked(&self) -> bool;
-    /// Checks if this lock is writelocked. Use this to wait before reading.
+    /// Checks if this lock is writelocked. Does not indicate readlock status; use [`MMFLock::readlocked`] for that.
     fn writelocked(&self) -> bool;
     /// Checks if there are any acitve locks, including the initialization locks.
     fn locked(&self) -> bool;
@@ -50,6 +50,16 @@ pub trait MMFLock {
     /// Nuke all existing write locks as there can only be one, legally.
     fn unlock_write(&self) -> MMFResult<()>;
     fn spin(&self, tries: &mut usize) -> MMFResult<bool>;
+    unsafe fn from_existing(pointer: *mut u8) -> Self
+    where
+        Self: Sized;
+    unsafe fn from_raw(pointer: *mut u8) -> Self
+    where
+        Self: Sized;
+    fn set_init(&self);
+    fn initialize(self) -> Self
+    where
+        Self: Sized;
 }
 
 impl fmt::Debug for dyn MMFLock {
@@ -115,7 +125,11 @@ impl<'a> RWLock<'a> {
     ///
     /// Any of these mean we hold a lock, all of these means we **can't hold any more read locks**.
     pub const HOLDING_R: u8 = !Self::HOLDING_W;
+}
 
+#[cfg(feature = "impl_lock")]
+/// Implements a good enough implementation of a lock for MMFs
+impl<'a> MMFLock for RWLock<'a> {
     /// Construct a lock from existing pointers.
     /// This is meant to be used with some external mechanism to allow reading and writing lock state directly to and
     /// from some larger struct. The lock will claim the first four bytes behind this pointer; if you do not intend to
@@ -157,7 +171,7 @@ impl<'a> RWLock<'a> {
     /// assert!(lock.unlock_write().is_ok());
     /// # }
     /// ```
-    pub unsafe fn from_existing(pointer: *mut u8) -> Self {
+    unsafe fn from_existing(pointer: *mut u8) -> Self {
         if pointer.is_null() {
             panic!("Never, ever pass a null pointer into a lock!")
         }
@@ -166,8 +180,8 @@ impl<'a> RWLock<'a> {
 
     /// Similar to [`Self::from_existing`], except it clears all state and ensures [`Self::initialized`] returns false.
     /// The same safety bounds apply as for `from_existing` with the exception of poisoned lock risks. It does mean,
-    /// however, that it invalidates any other locks that use the same pointer and clears any data in the last byte.
-    pub unsafe fn from_raw(pointer: *mut u8) -> Self {
+    /// however, that it invalidates any other locks that use the same pointer and clears any data.
+    unsafe fn from_raw(pointer: *mut u8) -> Self {
         let lock = Self::from_existing(pointer);
         lock.chunk.store(Self::INITIALIZE_MASK, Ordering::Release);
         lock
@@ -177,7 +191,7 @@ impl<'a> RWLock<'a> {
     /// The choice to clear all locks upon setting the init state was made to accommodate uses of
     /// [`Self::from_existing`] where it's reasonable to assume no locks are taken or the code using it handles the
     /// situation where the locks are cleared internally.
-    pub fn set_init(&self) {
+    fn set_init(&self) {
         fence(Ordering::AcqRel);
         self.chunk.store(0, Ordering::Release);
         self.current_lock.store(0, Ordering::Release);
@@ -196,15 +210,11 @@ impl<'a> RWLock<'a> {
     /// let lock = unsafe { RWLock::from_existing(ptr.cast()).initialize() };
     /// assert!(lock.initialized());
     /// ```
-    pub fn initialize(self) -> Self {
+    fn initialize(self) -> Self {
         self.set_init();
         self
     }
-}
 
-#[cfg(feature = "impl_lock")]
-/// Implements a good enough implementation of a lock for MMFs
-impl<'a> MMFLock for RWLock<'a> {
     /// Check if this lock has been initialized at all.
     ///
     /// Regardless of locking state, and abuse of the 7 empty bits, a lock _should_ not have all bits on the first byte
