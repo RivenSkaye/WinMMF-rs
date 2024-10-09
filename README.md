@@ -22,6 +22,11 @@ If there's something you'd like to see changed, open an issue explaining why and
 > [!TIP]
 > This lib crate _might_ be usuable on cross toolchains using [xwin](https://github.com/Jake-Shadle/xwin) and/or leveraging [cargo-xwin](https://github.com/rust-cross/cargo-xwin). No warranties or guarantees are provided, but there is a willingness to provide support for this once this crate reaches a point of maturity and stability that allows for allocating resources towards this end.
 
+---
+
+> [!TIP]
+> The crate does not warrant expansive usage examples or scenario sketches of any kind. Most use cases will only ever use a very narrow API (by design) and those are all covered [in the unit tests](https://github.com/RivenSkaye/WinMMF-rs/tree/master/src/unit_tests) with the exception of `read_to_buff`. The difference with `read` being that the second argument should be a `&mut Vec<u8>`. You don't _have_ to worry about the Vec's capacity either, `read_to_buff` will just reserve more space if required!
+
 ## Goals
 
 Being able to support sharing memory accross the application boundary. This includes providing ergonomic interfaces for screeching at people before things break (lacking permissions for example) and making it possible for easily accessing the data one needs to pass into child processes to share mem their way.
