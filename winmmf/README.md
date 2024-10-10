@@ -13,4 +13,4 @@ Contributors are always welcome. Even more so if they can help cover what's lack
 ## Goals
 
 Being able to support sharing memory accross the application boundary. This includes providing ergonomic interfaces for screeching at people before things break (lacking permissions for example) and making it possible for easily accessing the data one needs to pass into child processes to share mem their way.
-For now, this means _one large block_ of memory. Resizable mappings and whatnot are a planned feature, and a roadmap will be added at a later date.
+For now, this means _one large block_ of memory.
