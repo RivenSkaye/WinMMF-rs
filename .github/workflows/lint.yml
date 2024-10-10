@@ -8,8 +8,13 @@ on:
 
 jobs:
   check-formatting:
-    name: rustfmt
+    name: rustfmt checking ${{matrix.package}}
     runs-on: windows-latest
+    strategy:
+      matrix:
+        package:
+          - winmmf
+          - winmmf-ffi
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -20,8 +25,13 @@ jobs:
         run: cargo fmt --check
 
   clippy:
-    name: Clippy
+    name: Clippy  ${{matrix.package}}
     runs-on: windows-latest
+    strategy:
+      matrix:
+        package:
+          - winmmf
+          - winmmf-ffi
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
