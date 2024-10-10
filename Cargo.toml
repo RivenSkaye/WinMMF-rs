@@ -1,6 +1,7 @@
 [workspace]
-    members  = ["winmmf", "winmmf-ffi"]
-    resolver = "2"
+    default-members = ["winmmf", "winmmf-ffi"]
+    members         = ["winmmf", "winmmf-ffi"]
+    resolver        = "2"
 
     [workspace.package]
         authors     = ["Riven Skaye <riven@tae.moe"]

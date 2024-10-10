@@ -34,3 +34,9 @@
     rustc-args     = ["--cfg", "docsrs"]
     rustdoc-args   = ["--cfg", "docsrs"]
     targets        = ["i686-pc-windows-msvc", "x86_64-pc-windows-msvc"]
+
+[lib]
+    # sorry folks, but this lib is only meant to be used from other Rust crates.
+    # Use winmmf-ffi if you want a cdylib with exported symbols that aren't clobbered or mangled.
+    bench      = false
+    crate-type = ["dylib", "rlib"]
