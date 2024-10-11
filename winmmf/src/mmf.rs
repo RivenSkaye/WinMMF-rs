@@ -20,7 +20,7 @@ use super::{
     err::{Error as MMFError, MMFResult},
     states::MMFLock,
 };
-use fixedstr::{ztr32, ztr64};
+use fixedstr::ztr64;
 use microseh::try_seh;
 use windows::{
     core::Error as WErr,
@@ -46,20 +46,33 @@ use windows_ext::ext::QWordExt;
 
 /// Local namespace prefix
 /// Use this to ensure only you and your child processes can read this.
-pub const LOCAL_NAMESPACE: ztr32 = ztr32::const_make("Local\\");
+pub const LOCAL_NAMESPACE: ztr64 = ztr64::const_make("Local\\");
 /// Global namespace prefix, requires SeCreateGlobal permission to create.
 /// [See MSDN](https://learn.microsoft.com/en-us/windows/win32/memory/creating-named-shared-memory#first-process)
 /// for more info
-pub const GLOBAL_NAMESPACE: ztr32 = ztr32::const_make("Global\\");
+pub const GLOBAL_NAMESPACE: ztr64 = ztr64::const_make("Global\\");
 
 #[cfg(feature = "namespaces")]
 /// Namespaces as an enum, to unambiguously represent relevant information.
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum Namespace {
-    LOCAL,
-    GLOBAL,
-    CUSTOM,
+    LOCAL = 0,
+    GLOBAL = 1,
+    CUSTOM = 2,
+}
+
+/// We do a little transmutation, I'm an aclhemist!
+impl TryFrom<u8> for Namespace {
+    /// Unit type, as we only need it for checking and never for more info.
+    type Error = ();
+    /// This can only fail on invalid values. Check validity and transmute safely.
+    fn try_from(value: u8) -> Result<Namespace, Self::Error> {
+        match value {
+            ..=2 => Ok(unsafe { std::mem::transmute(value) }),
+            _ => Err(()),
+        }
+    }
 }
 
 #[cfg(feature = "namespaces")]
@@ -141,13 +154,13 @@ impl<LOCK: MMFLock> MemoryMappedFile<LOCK> {
     /// will make a part of the file inaccessible to other code trying to read it from a 32-bit process.
     /// The total size allocated will be 4 bytes larger than the specified size, but only after checking the input size
     /// is non-zero.
-    pub fn new(size: NonZeroUsize, name: &str, namespace: Namespace) -> MMFResult<Self> {
+    pub fn new(size: NonZeroUsize, name: impl Into<ztr64>, namespace: Namespace) -> MMFResult<Self> {
         // Build the name to use for the MMF
         let init_name = match namespace {
-            Namespace::GLOBAL => ztr64::make(&format!("{GLOBAL_NAMESPACE}{name}")),
-            Namespace::LOCAL => ztr64::make(&format!("{LOCAL_NAMESPACE}{name}")),
-            Namespace::CUSTOM => ztr64::make(name),
-        };
+            Namespace::GLOBAL => GLOBAL_NAMESPACE,
+            Namespace::LOCAL => LOCAL_NAMESPACE,
+            Namespace::CUSTOM => ztr64::new(),
+        } + name.into();
 
         // fuckin' windows
         let mmf_name = PCSTR::from_raw(init_name.to_ptr());
