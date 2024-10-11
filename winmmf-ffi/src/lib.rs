@@ -3,7 +3,10 @@
 use ffi_support::FfiStr;
 use std::{
     num::NonZeroUsize,
-    sync::{Mutex, OnceLock},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex, OnceLock,
+    },
 };
 pub use winmmf::Namespace as ValidNamespaces;
 use winmmf::{states::RWLock, *};
@@ -13,6 +16,8 @@ type MMFWrapper<'a> = Mutex<Vec<MemoryMappedFile<RWLock<'a>>>>;
 
 /// A wrapper to hold any MMFs that are produced during the application lifetime.
 static MMFS: OnceLock<MMFWrapper> = OnceLock::new();
+/// Currently selected default MMF to operate on. Counting starts from 1.
+static CURRENT: AtomicUsize = AtomicUsize::new(0);
 
 /// Lazy wrapper to use when ensuring initialization
 fn _init<'a>(cap: usize) -> MMFWrapper<'a> {
@@ -52,6 +57,7 @@ pub extern "system" fn open(size: Option<NonZeroUsize>, name: FfiStr, namespace:
                     .lock()
                     .map(|mut inner| {
                         inner.push(mapped);
+                        _ = CURRENT.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed);
                         0
                     })
                     .unwrap_or(5)
@@ -85,6 +91,7 @@ pub extern "system" fn new(size: Option<NonZeroUsize>, name: FfiStr, namespace: 
                     .lock()
                     .map(|mut inner| {
                         inner.push(mapped);
+                        _ = CURRENT.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed);
                         0
                     })
                     .unwrap_or(5)
