@@ -422,4 +422,13 @@ impl<LOCK: MMFLock> Drop for MemoryMappedFile<LOCK> {
 /// `Send` when the lock itself is. If the lock is `!Send`, operations performed here are not synchronized and thus the
 /// MMF itself isn't `Send` either.
 #[cfg(all(feature = "mmf_send", feature = "impl_mmf"))]
-unsafe impl<LOCK: MMFLock + Send> Send for MemoryMappedFile<LOCK> {}
+unsafe impl<LOCK: MMFLock + Send + Sync> Send for MemoryMappedFile<LOCK> {}
+
+/// Sync marker for use in shared contexts
+///
+/// # Safety
+/// The default MMF implementation doesn't do anything unless the lock gives an all clear, so it's safe to mark it
+/// `Sync` when the lock itself is. If the lock is `!Sync`, operations performed here are not synchronized and thus the
+/// MMF itself isn't `Sync` either.
+#[cfg(all(feature = "mmf_send", feature = "impl_mmf"))]
+unsafe impl<LOCK: MMFLock + Send + Sync> Sync for MemoryMappedFile<LOCK> {}
