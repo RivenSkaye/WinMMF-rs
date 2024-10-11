@@ -1,3 +1,5 @@
+#![deny(clippy::missing_docs_in_private_items)]
+#![deny(missing_docs)]
 //! # States and Locks for MMFs
 //!
 //! These are the cursed things required to prevent you from footgunning yourself. When not using the default lock

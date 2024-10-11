@@ -1,3 +1,5 @@
+#![deny(clippy::missing_docs_in_private_items)]
+#![deny(missing_docs)]
 //! # Memory-Mapped Files, Rust-style
 //!
 //! This crate contains everything you need to work with Memory-Mapped files. Or you can just roll your own and build
@@ -52,13 +54,16 @@ pub const LOCAL_NAMESPACE: ztr64 = ztr64::const_make("Local\\");
 /// for more info
 pub const GLOBAL_NAMESPACE: ztr64 = ztr64::const_make("Global\\");
 
-#[cfg(feature = "namespaces")]
 /// Namespaces as an enum, to unambiguously represent relevant information.
+#[cfg(feature = "namespaces")]
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum Namespace {
+    /// Local namespace, always allowed and sharable with children
     LOCAL = 0,
+    /// Global namespace, requires SeCreateGlobal. See [`GLOBAL_NAMESPACE`].
     GLOBAL = 1,
+    /// Custom namespace, makes it private unless you share/leak handles yourself.
     CUSTOM = 2,
 }
 
@@ -69,14 +74,16 @@ impl TryFrom<u8> for Namespace {
     /// This can only fail on invalid values. Check validity and transmute safely.
     fn try_from(value: u8) -> Result<Namespace, Self::Error> {
         match value {
-            ..=2 => Ok(unsafe { std::mem::transmute(value) }),
+            ..=2 => Ok(unsafe { std::mem::transmute::<u8, Self>(value) }),
             _ => Err(()),
         }
     }
 }
 
+/// Mostly for debug purposes
 #[cfg(feature = "namespaces")]
 impl fmt::Display for Namespace {
+    /// Presents the namespace, or a useless message for custom namespaces
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::LOCAL => write!(f, "{LOCAL_NAMESPACE}"),
@@ -132,6 +139,7 @@ pub struct MemoryMappedFile<LOCK: MMFLock> {
     map_view: Option<MemoryMappedView>,
     /// The pointer we can actually write into without fucking up the lock
     write_ptr: *mut u8,
+    /// A one-way changing cell to prevent using the MMF after closing it.
     closed: Cell<bool>,
 }
 
@@ -244,20 +252,20 @@ impl<LOCK: MMFLock> MemoryMappedFile<LOCK> {
         })
     }
 
-    #[allow(dead_code)]
     /// Get the namespace of the file, if any. If an empty string is returned, it's Local.
+    #[allow(dead_code)]
     pub fn namespace(&self) -> String {
         self.name.split_once('\\').unwrap_or_default().0.to_owned()
     }
 
-    #[allow(dead_code)]
     /// Return the filename the MMF is bound to, which is only the whole name if no namespace is provided.
+    #[allow(dead_code)]
     pub fn filename(&self) -> String {
         self.name.split_once('\\').map(|s| s.1.to_owned()).unwrap_or(self.name.to_string())
     }
 
-    #[allow(dead_code)]
     /// Returns the stored name, which should be `[Namespace\]<FileName>`
+    #[allow(dead_code)]
     pub fn fullname(&self) -> String {
         self.name.to_string()
     }
@@ -273,8 +281,8 @@ impl<LOCK: MMFLock> MemoryMappedFile<LOCK> {
     }
 }
 
-#[cfg(feature = "impl_mmf")]
 /// Implements a usable file-like interface for working with an MMF. Pass all input as bytes, please.
+#[cfg(feature = "impl_mmf")]
 impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
     /// Attempts to read the entirety of the data as defined in [`Self::size`].
     /// This function succeeds if there is a value in [`Self::map_view`] but it cannot guarantee the data returned is
@@ -374,11 +382,13 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
 /// Small struct wrapping a Windows type just to spare my eyes.
 #[derive(Debug, Clone)]
 pub struct MemoryMappedView {
+    /// The address to use for reads and writes
     address: MEMORY_MAPPED_VIEW_ADDRESS,
 }
 
 /// I like `into()`
 impl From<MEMORY_MAPPED_VIEW_ADDRESS> for MemoryMappedView {
+    /// This literally just stuffs it into the only field
     fn from(value: MEMORY_MAPPED_VIEW_ADDRESS) -> Self {
         Self { address: value }
     }
@@ -407,9 +417,10 @@ impl Drop for MemoryMappedView {
     }
 }
 
-#[cfg(feature = "impl_mmf")]
 /// Implement closing the handle to the MMF before dropping it, so the system can clean up resources.
+#[cfg(feature = "impl_mmf")]
 impl<LOCK: MMFLock> Drop for MemoryMappedFile<LOCK> {
+    /// Ignore any errors when closing the handle.
     fn drop(&mut self) {
         self.close().unwrap_or(())
     }

@@ -1,3 +1,5 @@
+#![deny(clippy::missing_docs_in_private_items)]
+#![deny(missing_docs)]
 //! Errors produced and introduced in this crate, to help users figure out what went wrong.
 //!
 //! Handling these is recommended, but if you don't then either the MMF was never opened,
