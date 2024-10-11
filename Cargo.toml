@@ -13,6 +13,3 @@
         readme      = "README.md"
         repository  = "https://github.com/RivenSkaye/WinMMF-rs"
         version     = "0.1.3"
-
-    [workspace.dependencies]
-        fixedstr = {version = "0.5.8", features = ["std"]}
