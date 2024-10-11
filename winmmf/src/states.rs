@@ -36,9 +36,11 @@ use super::err::{Error, MMFResult};
 pub trait MMFLock {
     /// Check if the data this lock is has been initialized for use
     fn initialized(&self) -> bool;
-    /// Checks if this lock is readlocked. Does not indicate writelock status; use [`MMFLock::writelocked`] for that.
+    /// Checks if this lock is readlocked. Does not indicate writelock status; use
+    /// [the other lock probe][`MMFLock::writelocked`] for that.
     fn readlocked(&self) -> bool;
-    /// Checks if this lock is writelocked. Does not indicate readlock status; use [`MMFLock::readlocked`] for that.
+    /// Checks if this lock is writelocked. Does not indicate readlock status; use
+    /// [the other lock probe][`MMFLock::readlocked`] for that.
     fn writelocked(&self) -> bool;
     /// Checks if there are any acitve locks, including the initialization locks.
     fn locked(&self) -> bool;
@@ -52,15 +54,23 @@ pub trait MMFLock {
     fn unlock_write(&self) -> MMFResult<()>;
     /// Spin and return true while the lock is held
     fn spin(&self, tries: &mut usize) -> MMFResult<bool>;
-    #[allow(clippy::missing_safety_doc)]
+    /// Create a new lock at the location of an existing pointer.
+    ///
+    /// # Safety
+    /// Only call this to a pointer where the underlying data is from the same trait impl.
     unsafe fn from_existing(pointer: *mut u8) -> Self
     where
         Self: Sized;
-    #[allow(clippy::missing_safety_doc)]
+    /// Create a new lock from a raw pointer
+    ///
+    /// # Safety
+    /// Only pass this a pointer with enough space to hold the lock.
     unsafe fn from_raw(pointer: *mut u8) -> Self
     where
         Self: Sized;
+    /// Set the lock's first byte to an initialized state.
     fn set_init(&self);
+    /// Self-consuming wrapper to chain initialization with [`set_init`][`MMFLock::set_init`]
     fn initialize(self) -> Self
     where
         Self: Sized;
