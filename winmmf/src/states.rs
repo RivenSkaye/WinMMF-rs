@@ -50,6 +50,7 @@ pub trait MMFLock {
     fn lock_write(&self) -> MMFResult<()>;
     /// Nuke all existing write locks as there can only be one, legally.
     fn unlock_write(&self) -> MMFResult<()>;
+    /// Spin and return true while the lock is held
     fn spin(&self, tries: &mut usize) -> MMFResult<bool>;
     #[allow(clippy::missing_safety_doc)]
     unsafe fn from_existing(pointer: *mut u8) -> Self
@@ -367,12 +368,11 @@ impl MMFLock for RWLock<'_> {
     /// If uni taught me one thing, it would be that `while true` on locks will eventually lead to the big funny.
     fn spin(&self, tries: &mut usize) -> MMFResult<bool> {
         tries.add_assign(1);
-        if self.locked() {
-            Ok(true)
-        } else if usize::MAX.eq(tries) {
+        let held = self.locked();
+        if usize::MAX.eq(tries) && held {
             Err(Error::LockViolation)
         } else {
-            Ok(false)
+            Ok(held)
         }
     }
 }
