@@ -401,3 +401,12 @@ impl<LOCK: MMFLock> Drop for MemoryMappedFile<LOCK> {
         self.close().unwrap_or(())
     }
 }
+
+/// Send marker for use in shared contexts
+///
+/// # Safety
+/// The default MMF implementation doesn't do anything unless the lock gives an all clear, so it's safe to mark it
+/// `Send` when the lock itself is. If the lock is `!Send`, operations performed here are not synchronized and thus the
+/// MMF itself isn't `Send` either.
+#[cfg(all(feature = "mmf_send", feature = "impl_mmf"))]
+unsafe impl<LOCK: MMFLock + Send> Send for MemoryMappedFile<LOCK> {}
