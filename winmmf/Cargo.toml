@@ -26,7 +26,8 @@
 [features]
     default    = ["impl_lock", "impl_mmf"]
     impl_lock  = []
-    impl_mmf   = ["namespaces"]
+    impl_mmf   = ["mmf_send", "namespaces"]
+    mmf_send   = []
     namespaces = []
 
 [package.metadata.docs.rs]
