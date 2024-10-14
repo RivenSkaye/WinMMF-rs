@@ -140,9 +140,9 @@ pub struct MemoryMappedFile<LOCK: MMFLock> {
     /// The pointer we can actually write into without fucking up the lock
     write_ptr: *mut u8,
     /// A one-way changing cell to prevent using the MMF after closing it.
-    pub closed: Cell<bool>,
+    closed: Cell<bool>,
     /// A bool to prevent writing through an MMF opened for reading
-    pub readonly: bool,
+    readonly: bool,
 }
 
 #[cfg(feature = "impl_mmf")]
@@ -271,20 +271,27 @@ impl<LOCK: MMFLock> MemoryMappedFile<LOCK> {
         Self::open(size, name, namespace, false)
     }
 
+    /// Check if this MMF can be written to
+    pub fn is_writable(&self) -> bool {
+        !self.readonly && !self.closed.get() && self.lock.initialized()
+    }
+
+    /// Check if this MMF can be read from
+    pub fn is_readable(&self) -> bool {
+        !self.closed.get() && self.lock.initialized()
+    }
+
     /// Get the namespace of the file, if any. If an empty string is returned, it's Local.
-    #[allow(dead_code)]
     pub fn namespace(&self) -> String {
         self.name.split_once('\\').unwrap_or_default().0.to_owned()
     }
 
     /// Return the filename the MMF is bound to, which is only the whole name if no namespace is provided.
-    #[allow(dead_code)]
     pub fn filename(&self) -> String {
         self.name.split_once('\\').map(|s| s.1.to_owned()).unwrap_or(self.name.to_string())
     }
 
     /// Returns the stored name, which should be `[Namespace\]<FileName>`
-    #[allow(dead_code)]
     pub fn fullname(&self) -> String {
         self.name.to_string()
     }
