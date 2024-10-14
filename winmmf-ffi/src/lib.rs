@@ -1,8 +1,21 @@
 #![feature(let_chains)]
 
+//! # An FFI interface for WinMMF
+//!
+//! The recommended way of working with this interface is therefore to call this function for the first read, reuse the
+//! pointer provided for all subsequent reads by calling [`read_buf`], and then freeing it with [`free_result`] with
+//! other teardown and exit steps for your program. If the lifetime for any MMFs should be `&'static` it's possible to
+//! leave cleanup to the OS. But no guarantees are made if or when that happens.
+//!
+//! During the lifetime of your program, if you decide to close any MMFs, they will be ejected from the inner
+//! collection. Should you need to reopen one, and you're sure other handles to it yet live in the system, you can open
+//! it anew and your data should be there unchanged.
+//! Should you forget to free a pointer, use [`free_raw`] at your own risk.
+
 use ffi_support::FfiStr;
 use std::{
     num::NonZeroUsize,
+    ptr::null_mut,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Mutex, OnceLock,
@@ -102,4 +115,124 @@ pub extern "system" fn new(size: Option<NonZeroUsize>, name: FfiStr, namespace: 
     }
 }
 
-/// Read N bytes from the MMF
+/// Read `count` bytes from the MMF into the provided buffer.
+///
+/// It is up to the caller to ensure the buffer is large enough to hold at least `count` bytes. Passing in a buffer
+/// smaller than `count` from Rust space is undefined behavior. This function _will_ make the assumption the buffer is
+/// exactly `count` items long.
+/// Return values are negative integers for errors, or 0 for success.
+///
+/// - -1: No MMFs opened yet
+/// - -2: MMF is closed
+/// - -3: MMF isn't initialized
+/// - -4: ???
+#[no_mangle]
+pub unsafe extern "system" fn read_buf(mmf_idx: Option<NonZeroUsize>, count: usize, buff: *mut u8) -> isize {
+    if buff.is_null() {
+        return -4;
+    }
+    if count == 0 {
+        return 0;
+    }
+    // Variable does not need to be mutable, but it's important to know that it is a mutable slice
+    let buf_slice: &mut [u8] = std::slice::from_raw_parts_mut(buff, count);
+    MMFS.get()
+        .map(|inner| {
+            inner
+                .lock()
+                .map(|inner| {
+                    inner
+                        .get(mmf_idx.map(|nsu| nsu.get()).unwrap_or_else(|| CURRENT.load(Ordering::Acquire)))
+                        .map(|mmf| {
+                            mmf.read_to_raw(buf_slice, count).map(|_| 0).unwrap_or_else(|e| match e {
+                                Error::MMF_NotFound => -2,
+                                Error::Uninitialized => -3,
+                                _ => -4,
+                            })
+                        })
+                        .unwrap_or(-1)
+                })
+                .unwrap_or(-4)
+        })
+        .unwrap_or(-1)
+}
+
+/// Read `count` bytes or all contents from the MMF and give back a pointer to the data.
+///
+/// The pointer produced from this function **must** be freed using [`free_result`], regardless of error state.
+/// To this end, the returned pointer will _always_ have enough size behind it to fit the entire mapped view. Before
+/// freeing it, this pointer may also be used with [read_buf] so you know you have a safe pointer to work with.
+///
+/// If something went wrong, the data behind the pointer will be an error code, right padded with `0xFF` until the end
+/// of the requested buffer. If no size is provided, the returned pointer will be the length of the current active MMF.
+#[no_mangle]
+pub extern "system" fn read(mmf_idx: Option<NonZeroUsize>, count: usize) -> *mut u8 {
+    MMFS.get()
+        .map(|inner| {
+            inner
+                .lock()
+                .map(|inner| {
+                    inner
+                        .get(mmf_idx.map(|nsu| nsu.get()).unwrap_or_else(|| CURRENT.load(Ordering::Acquire)))
+                        .map(|mmf| {
+                            if count == 0 {
+                                null_mut()
+                            } else {
+                                let mut ret = Vec::new();
+                                let ptr = ret.as_mut_ptr();
+
+                                match mmf.read_to_buf(&mut ret, count) {
+                                    Ok(_) => {
+                                        std::mem::forget(ret);
+                                        ptr
+                                    } /* Becomes a pointer to the first */
+                                    // element in the vec
+                                    Err(e) => {
+                                        let val = match e {
+                                            Error::MMF_NotFound => -2_i8,
+                                            Error::Uninitialized => -3_i8,
+                                            _ => -4_i8,
+                                        };
+                                        /*Error::MMF_NotFound => -2_i8,
+                                        Error::Uninitialized => -3_i8,
+                                        _ => -4_i8, */
+                                        ret = vec![0xFF; mmf.size()];
+                                        ret[0] = val as u8;
+                                        std::mem::forget(ret);
+                                        ptr
+                                    }
+                                }
+                            }
+                        })
+                        .unwrap_or(null_mut())
+                })
+                .unwrap_or(null_mut())
+        })
+        .unwrap_or(null_mut())
+}
+
+#[no_mangle]
+pub extern "system" fn free_result(mmf_idx: Option<NonZeroUsize>, res: *mut u8) {
+    MMFS.get()
+        .map(|inner| {
+            inner
+                .lock()
+                .map(|inner| {
+                    inner
+                        .get(mmf_idx.map(|nsu| nsu.get()).unwrap_or_else(|| CURRENT.load(Ordering::Acquire)))
+                        .map(|mmf| unsafe {
+                            let resvec = Vec::from_raw_parts(res, mmf.size(), mmf.size());
+                            drop(resvec)
+                        })
+                        .unwrap_or(())
+                })
+                .unwrap_or(())
+        })
+        .unwrap_or(())
+}
+
+/// You had better know how big that thing is
+#[no_mangle]
+pub unsafe extern "system" fn free_raw(res: *mut u8, size: usize) {
+    drop(Vec::from_raw_parts(res, size, size))
+}
