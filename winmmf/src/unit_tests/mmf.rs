@@ -33,8 +33,9 @@ pub fn test_read_other() {
         .expect("creation failed");
     unsafe { SetLastError(WFoundation::WIN32_ERROR(0)) };
     file1.write(input).expect("Failed to write");
-    let file2 = MemoryMappedFile::<RWLock>::open(NonZeroUsize::new(64).unwrap(), "test_read_other", Namespace::LOCAL)
-        .expect("2nd open failed");
+    let file2 =
+        MemoryMappedFile::<RWLock>::open(NonZeroUsize::new(64).unwrap(), "test_read_other", Namespace::LOCAL, false)
+            .expect("2nd open failed");
     unsafe { SetLastError(WFoundation::WIN32_ERROR(0)) };
     let readback = file2.read(input.len()).expect("Failed to read");
     unsafe { SetLastError(WFoundation::WIN32_ERROR(0)) };
@@ -50,13 +51,15 @@ pub fn test_lock_reopen() {
     let file1 = MemoryMappedFile::<RWLock>::new(NonZeroUsize::new(64).unwrap(), "test_lock_reopen", Namespace::LOCAL)
         .expect("creation failed");
     unsafe { SetLastError(WFoundation::WIN32_ERROR(0)) };
-    let file2 = MemoryMappedFile::<RWLock>::open(NonZeroUsize::new(64).unwrap(), "test_lock_reopen", Namespace::LOCAL)
-        .expect("2nd open failed");
+    let file2 =
+        MemoryMappedFile::<RWLock>::open(NonZeroUsize::new(64).unwrap(), "test_lock_reopen", Namespace::LOCAL, false)
+            .expect("2nd open failed");
     unsafe { SetLastError(WFoundation::WIN32_ERROR(0)) };
 
     drop(file1);
-    let file3 = MemoryMappedFile::<RWLock>::open(NonZeroUsize::new(64).unwrap(), "test_lock_reopen", Namespace::LOCAL)
-        .expect("2nd open failed");
+    let file3 =
+        MemoryMappedFile::<RWLock>::open(NonZeroUsize::new(64).unwrap(), "test_lock_reopen", Namespace::LOCAL, false)
+            .expect("2nd open failed");
     file3.write(input).expect("Failed to write");
     let readback = file2.read(input.len()).expect("Failed to read on 2");
 
@@ -72,9 +75,13 @@ pub fn test_no_use_after_close() {
         MemoryMappedFile::<RWLock>::new(NonZeroUsize::new(64).unwrap(), "test_no_use_after_close", Namespace::LOCAL)
             .expect("creation failed");
     unsafe { SetLastError(WFoundation::WIN32_ERROR(0)) };
-    let file2 =
-        MemoryMappedFile::<RWLock>::open(NonZeroUsize::new(64).unwrap(), "test_no_use_after_close", Namespace::LOCAL)
-            .expect("2nd open failed");
+    let file2 = MemoryMappedFile::<RWLock>::open(
+        NonZeroUsize::new(64).unwrap(),
+        "test_no_use_after_close",
+        Namespace::LOCAL,
+        false,
+    )
+    .expect("2nd open failed");
     unsafe { SetLastError(WFoundation::WIN32_ERROR(0)) };
 
     file1.close().expect("Could not close MMF?");
@@ -97,9 +104,13 @@ pub fn test_no_exist_after_close() {
         MemoryMappedFile::<RWLock>::new(NonZeroUsize::new(64).unwrap(), "test_no_exist_after_close", Namespace::LOCAL)
             .expect("2nd open failed");
     unsafe { SetLastError(WFoundation::WIN32_ERROR(0)) };
-    let file3 =
-        MemoryMappedFile::<RWLock>::open(NonZeroUsize::new(64).unwrap(), "test_no_exist_after_close", Namespace::LOCAL)
-            .expect("2nd open failed");
+    let file3 = MemoryMappedFile::<RWLock>::open(
+        NonZeroUsize::new(64).unwrap(),
+        "test_no_exist_after_close",
+        Namespace::LOCAL,
+        false,
+    )
+    .expect("2nd open failed");
     let readback = file3.read(input.len()).expect("Failed to read");
     unsafe { SetLastError(WFoundation::WIN32_ERROR(0)) };
     drop(file2);

@@ -140,7 +140,9 @@ pub struct MemoryMappedFile<LOCK: MMFLock> {
     /// The pointer we can actually write into without fucking up the lock
     write_ptr: *mut u8,
     /// A one-way changing cell to prevent using the MMF after closing it.
-    closed: Cell<bool>,
+    pub closed: Cell<bool>,
+    /// A bool to prevent writing through an MMF opened for reading
+    pub readonly: bool,
 }
 
 #[cfg(feature = "impl_mmf")]
@@ -206,14 +208,16 @@ impl<LOCK: MMFLock> MemoryMappedFile<LOCK> {
             lock,
             write_ptr,
             closed: Cell::new(false),
+            readonly: false,
         })
     }
 
     /// Open an existing MMF, if it exists.
     ///
+    /// Defaults to read and write permissions, use the exposed wrappers to open R or RW
     /// I have no idea what happens if you call this on a fake name. Code responsibly.
     /// In all reality though, it should return an error that you can handle.
-    pub fn open(size: NonZeroUsize, name: &str, namespace: Namespace) -> MMFResult<Self> {
+    pub fn open(size: NonZeroUsize, name: &str, namespace: Namespace, readonly: bool) -> MMFResult<Self> {
         // Build the name to use for the MMF
         let init_name = match namespace {
             Namespace::GLOBAL => ztr64::make(&format!("{GLOBAL_NAMESPACE}{name}")),
@@ -249,7 +253,22 @@ impl<LOCK: MMFLock> MemoryMappedFile<LOCK> {
             map_view: Some(map_view.into()),
             write_ptr,
             closed: Cell::new(false),
+            readonly: readonly,
         })
+    }
+
+    /// Open an MMF for reading
+    ///
+    /// Wrapper around [`open`][Self::open] that always passes true
+    pub fn open_read(size: NonZeroUsize, name: &str, namespace: Namespace) -> MMFResult<Self> {
+        Self::open(size, name, namespace, true)
+    }
+
+    /// Open an MMF for reading and writing
+    ///
+    /// Wrapper around [`open`][Self::open] that always passes false
+    pub fn open_write(size: NonZeroUsize, name: &str, namespace: Namespace) -> MMFResult<Self> {
+        Self::open(size, name, namespace, false)
     }
 
     /// Get the namespace of the file, if any. If an empty string is returned, it's Local.
@@ -288,12 +307,14 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
     /// This function succeeds if there is a value in [`Self::map_view`] but it cannot guarantee the data returned is
     /// correct. This is an unfortunate side effect of having to work with raw pointers and bytes in memory.
     /// Assuming nothing external has touched the memory region other than this class, it _should_ be valid data unless
-    /// it's marked as uninitialized.
-    /// These errors use the most similar error codes from the system API:
-    /// - 2: File not found; the MMF isn't opened yet or no map view exists.
-    /// - 9: Invalid block; the lock is telling us this data has not yet been initialized.
-    /// - 19: Write Protected; the file has a write lock on it which means reading might return incomplete data, or the
+    /// it's marked as uninitialized. The returned error for this is an instance of the
+    /// [crate's error enum][crate::err::Error]
+    ///
+    /// - 1: Write Protected; the file has a write lock on it which means reading might return incomplete data, or the
     ///   maximum amount of readers has been reached (this should not happen assuming all implementations are clean).
+    /// These errors use the most similar error codes from the system API:
+    /// - 2: Invalid block; the lock is telling us this data has not yet been initialized.
+    /// - 5: File not found; the MMF isn't opened yet or no map view exists.
     #[inline]
     fn read(&self, count: usize) -> Result<Vec<u8>, MMFError> {
         if self.closed.get() {
@@ -307,7 +328,8 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
     /// See the documentation for [Self::read()], except this takes a buffer to write to.
     ///
     /// If the count is 0, the entire MMF will be read into the buffer. If the buffer is smaller than the amount of data
-    /// to be read, it _will be grown_ to fit the requested data, using [`Vec::reserve_exact`].
+    /// to be read, it _will be grown_ to fit the requested data, using [`Vec::reserve_exact`].The returned error for
+    /// this is an instance of the [crate's error enum][crate::err::Error]
     fn read_to_buf(&self, buffer: &mut Vec<u8>, count: usize) -> Result<(), MMFError> {
         if self.closed.get() {
             return Err(MMFError::MMF_NotFound);
@@ -342,15 +364,15 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
     /// This function errors only if the lock could not be acquired or when trying to write more data than fits. Writing
     /// more data than the MMF can hold is UB so this is prevented by erroring out instead. If the input buffer is
     /// smaller than the destination file, the end is zeroed out. The start of the buffer is also padded by the lock
-    /// bytes to signal and flag locking.
+    /// bytes to signal and flag locking.The returned error for this is an instance of the
+    /// [crate's error enum][crate::err::Error]
     ///
     /// Error codes produced by this function:
-    /// - 8: Not enough memory; the write was blocked because it was too large.
-    /// - 5: Access denied; the lock could not be acquired.
-    /// - 9: Invalid block; the lock is telling us this data has not yet been initialized.
+    /// - 0 or 1: Access denied; the lock could not be acquired or the MMF is read-only.
+    /// - 4: Not enough memory; the write was blocked because it was too large.
     /// - All errors from [Self::read()] as a read is required to update the lock.
     fn write(&self, buffer: &[u8]) -> MMFResult<()> {
-        if self.closed.get() {
+        if self.readonly || self.closed.get() {
             return Err(MMFError::MMF_NotFound);
         }
         let cap = buffer.len().min(self.size);
@@ -430,8 +452,7 @@ impl<LOCK: MMFLock> Drop for MemoryMappedFile<LOCK> {
 ///
 /// # Safety
 /// The default MMF implementation doesn't do anything unless the lock gives an all clear, so it's safe to mark it
-/// `Send` when the lock itself is. If the lock is `!Send`, operations performed here are not synchronized and thus the
-/// MMF itself isn't `Send` either.
+/// `Send` when the lock itself is.
 #[cfg(all(feature = "mmf_send", feature = "impl_mmf"))]
 unsafe impl<LOCK: MMFLock + Send + Sync> Send for MemoryMappedFile<LOCK> {}
 
@@ -439,7 +460,6 @@ unsafe impl<LOCK: MMFLock + Send + Sync> Send for MemoryMappedFile<LOCK> {}
 ///
 /// # Safety
 /// The default MMF implementation doesn't do anything unless the lock gives an all clear, so it's safe to mark it
-/// `Sync` when the lock itself is. If the lock is `!Sync`, operations performed here are not synchronized and thus the
-/// MMF itself isn't `Sync` either.
+/// `Sync` when the lock itself is.
 #[cfg(all(feature = "mmf_send", feature = "impl_mmf"))]
 unsafe impl<LOCK: MMFLock + Send + Sync> Sync for MemoryMappedFile<LOCK> {}
