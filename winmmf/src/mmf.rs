@@ -357,8 +357,8 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
             // cause the same kind of problems in safe code, because a dirty Vec violates soundness.
             unsafe {
                 buffer.set_len(to_read);
-                self.write_ptr.copy_to(buffer.as_mut_ptr(), to_read)
-            };
+                self.write_ptr.copy_to(buffer.as_mut_ptr(), to_read);
+            }
             self.lock.unlock_read().unwrap();
             Ok(())
         } else {
