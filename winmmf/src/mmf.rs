@@ -105,6 +105,8 @@ pub trait Mmf {
     fn read(&self, count: usize) -> MMFResult<Vec<u8>>;
     /// Read data from the MMF into a provided buffer.
     fn read_to_buf(&self, buffer: &mut Vec<u8>, count: usize) -> MMFResult<()>;
+    /// Read data into a raw pointer and pray it's valid
+    unsafe fn read_to_raw(&self, buffer: &[u8], count: usize) -> MMFResult<()>;
     /// Write data to the MMF.
     fn write(&self, buffer: &[u8]) -> MMFResult<()>;
 }
@@ -361,6 +363,38 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
             }
             self.lock.unlock_read().unwrap();
             Ok(())
+        } else {
+            Err(MMFError::MMF_NotFound)
+        }
+    }
+
+    /// See the documentation for [Self::read()], except this takes a buffer to write to.
+    ///
+    /// If the count is 0, the entire MMF will be read into the buffer. If the buffer is smaller than the amount of data
+    /// to be read, it _will be grown_ to fit the requested data, using [`Vec::reserve_exact`].The returned error for
+    /// this is an instance of the [crate's error enum][crate::err::Error]
+    unsafe fn read_to_raw(&self, buffer: &[u8], count: usize) -> Result<(), MMFError> {
+        if self.closed.get() {
+            return Err(MMFError::MMF_NotFound);
+        }
+        if self.map_view.is_some() {
+            if !self.lock.initialized() {
+                return Err(MMFError::Uninitialized);
+            }
+            self.lock.lock_read()?;
+
+            if buffer.len() < count {
+                Err(MMFError::NotEnoughMemory)
+            } else {
+                // safety: memory may overlap with copy_to. With the size check, we also ensure we don't copy more bytes
+                // than what fits in the buffer. If someone gave us a dirty slice, that's on them. Notably, they would
+                // get UB from providing a slice with an incorrect internally registered length.
+                unsafe {
+                    self.write_ptr.copy_to(buffer.as_ptr().cast_mut(), count);
+                }
+                self.lock.unlock_read().unwrap();
+                Ok(())
+            }
         } else {
             Err(MMFError::MMF_NotFound)
         }
