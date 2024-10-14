@@ -11,7 +11,7 @@ use std::{
 pub use winmmf::Namespace as ValidNamespaces;
 use winmmf::{states::RWLock, *};
 
-/// You didn't think I was foing to keep _this_ long a type unaliased right?
+/// You didn't think I was going to keep _this_ long a type unaliased right?
 type MMFWrapper<'a> = Mutex<Vec<MemoryMappedFile<RWLock<'a>>>>;
 
 /// A wrapper to hold any MMFs that are produced during the application lifetime.
@@ -101,3 +101,5 @@ pub extern "system" fn new(size: Option<NonZeroUsize>, name: FfiStr, namespace: 
         }
     }
 }
+
+/// Read N bytes from the MMF
