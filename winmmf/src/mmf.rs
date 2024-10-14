@@ -107,6 +107,8 @@ pub trait Mmf {
     fn read_to_buf(&self, buffer: &mut Vec<u8>, count: usize) -> MMFResult<()>;
     /// Read data into a raw pointer and pray it's valid
     unsafe fn read_to_raw(&self, buffer: &[u8], count: usize) -> MMFResult<()>;
+    /// Allows for viewing the size without exposing the property.
+    fn size(&self) -> usize;
     /// Write data to the MMF.
     fn write(&self, buffer: &[u8]) -> MMFResult<()>;
 }
@@ -439,6 +441,14 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
         } else {
             Err(MMFError::Uninitialized)
         }
+    }
+
+    /// Returns the size of the data portion of the MMF.
+    ///
+    /// This allows users to know the MMF's size without exposing it publicly in case someone has a `&mut MMF` because
+    /// that would be very very dangerous.
+    fn size(&self) -> usize {
+        self.size
     }
 }
 
