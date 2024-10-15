@@ -106,7 +106,10 @@ pub trait Mmf {
     /// Read data from the MMF into a provided buffer.
     fn read_to_buf(&self, buffer: &mut Vec<u8>, count: usize) -> MMFResult<()>;
     /// Read data into a raw pointer and pray it's valid
-    unsafe fn read_to_raw(&self, buffer: &[u8], count: usize) -> MMFResult<()>;
+    ///
+    /// # Safety
+    /// The caller is responsible to ensure the slice is big enough to read into.
+    unsafe fn read_to_raw(&self, buffer: *mut u8, count: usize) -> MMFResult<()>;
     /// Allows for viewing the size without exposing the property.
     fn size(&self) -> usize;
     /// Write data to the MMF.
@@ -257,7 +260,7 @@ impl<LOCK: MMFLock> MemoryMappedFile<LOCK> {
             map_view: Some(map_view.into()),
             write_ptr,
             closed: Cell::new(false),
-            readonly: readonly,
+            readonly,
         })
     }
 
@@ -378,7 +381,7 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
     /// opened and initialized, with the usual errors from [`read`][Self::read] to make these problems known to callers.
     /// It is the caller's responsibility to ensure that `buffer` is valid for at least `count` bytes. Failing to do so
     /// is UB. See the documentation for [`std::ptr::copy`] for safety concerns, the provided `buffer` is the `dst`.
-    unsafe fn read_to_raw(&self, buffer: &[u8], count: usize) -> Result<(), MMFError> {
+    unsafe fn read_to_raw(&self, buffer: *mut u8, count: usize) -> Result<(), MMFError> {
         if self.closed.get() {
             Err(MMFError::MMF_NotFound)
         } else if count == 0 {
@@ -389,18 +392,14 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
             }
             self.lock.lock_read()?;
 
-            if buffer.len() < count {
-                Err(MMFError::NotEnoughMemory)
-            } else {
-                // safety: memory may overlap with copy_to. With the size check, we also ensure we don't copy more bytes
-                // than what fits in the buffer. If someone gave us a dirty slice, that's on them. Notably, they would
-                // get UB from providing a slice with an incorrect internally registered length.
-                unsafe {
-                    self.write_ptr.copy_to(buffer.as_ptr().cast_mut(), count.min(self.size));
-                }
-                self.lock.unlock_read().unwrap();
-                Ok(())
+            // safety: memory may overlap with copy_to. With the size check, we also ensure we don't copy more bytes
+            // than what fits in the buffer. If someone gave us a dirty slice, that's on them. Notably, they would
+            // get UB from providing a slice with an incorrect internally registered length.
+            unsafe {
+                self.write_ptr.copy_to(buffer, count.min(self.size));
             }
+            self.lock.unlock_read().unwrap();
+            Ok(())
         } else {
             Err(MMFError::MMF_NotFound)
         }

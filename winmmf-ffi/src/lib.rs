@@ -134,8 +134,6 @@ pub unsafe extern "system" fn read_buf(mmf_idx: Option<NonZeroUsize>, count: usi
     if count == 0 {
         return 0;
     }
-    // Variable does not need to be mutable, but it's important to know that it is a mutable slice
-    let buf_slice: &mut [u8] = std::slice::from_raw_parts_mut(buff, count);
     MMFS.get()
         .map(|inner| {
             inner
@@ -144,7 +142,7 @@ pub unsafe extern "system" fn read_buf(mmf_idx: Option<NonZeroUsize>, count: usi
                     inner
                         .get(mmf_idx.map(|nsu| nsu.get()).unwrap_or_else(|| CURRENT.load(Ordering::Acquire)))
                         .map(|mmf| {
-                            mmf.read_to_raw(buf_slice, count).map(|_| 0).unwrap_or_else(|e| match e {
+                            mmf.read_to_raw(buff, count).map(|_| 0).unwrap_or_else(|e| match e {
                                 Error::MMF_NotFound => -2,
                                 Error::Uninitialized => -3,
                                 _ => -4,
