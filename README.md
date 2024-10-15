@@ -7,6 +7,16 @@ This workspace aims to provide the main `winmmf` package as it exists on crates.
 - [winmmf](./winmmf), the actual Rust wrapper for Memory Mapped Files
 - [winmmf-ffi](./winmmf-ffi/), `pub extern "C"` API for using WinMMF from other languages
 
+### versioning
+
+The crates here live in pretty standard semver. The only thing that stands out is that every API-breaking change in `WinMMF` will cause all crates in the workspace to be bumped to the next indicative version. As the workspace is currently on 0.x.y, this means it bumps to 0.z.0.
+
+## MSRV
+
+The MSRV is manually checked before releasing as of workspace version 0.2.1. This is done with the help of [`cargo-msrv`](https://gribnau.dev/cargo-msrv/index.html). I might integrate it in CI at some point, but there are currently no plans to do so.
+
+The current listed MSRV is: **1.75**.
+
 ## Supported platforms
 
 This crate only supports Windows. Nothing else uses this mechanic for shared memory to the best of my knowledge and it sounds painful to even test it. If you find it works in other places, let me know and I'll list it!  
