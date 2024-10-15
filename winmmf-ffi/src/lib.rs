@@ -217,8 +217,15 @@ pub extern "system" fn read(mmf_idx: Option<NonZeroUsize>, count: usize) -> *mut
         .unwrap_or(null_mut())
 }
 
+/// Free a pointer used for reading from an MMF by its index number.
+///
+/// Do not pass pointers not received from this library. Doing so is UB by definition.
+/// Null pointers will be silently ignored.
 #[no_mangle]
-pub extern "system" fn free_result(mmf_idx: Option<NonZeroUsize>, res: *mut u8) {
+pub unsafe extern "system" fn free_result(mmf_idx: Option<NonZeroUsize>, res: *mut u8) {
+    if res.is_null() {
+        return;
+    }
     MMFS.get()
         .map(|inner| {
             inner
@@ -287,8 +294,8 @@ pub extern "system" fn write(mmf_idx: Option<NonZeroUsize>, data: *mut u8, size:
 /// - If you pass in a size of 0, you get a null pointer.
 /// - If you don't provide a usable name, you get a null pointer.
 /// - If you pass an invalid namespace, you get a null pointer.
-/// - If the returned pointer is not null, it's valid until you close the MMF. The first byte behind it will be its
-///   index, unless you have more than 256 MMFs open. Please don't open that many...
+/// - If the returned pointer is not null, it's valid until you close the MMF. All bytes behind it will be its index,
+///   unless you have more than 255 MMFs open. Please don't open that many...
 ///
 /// This pointer still has to be [`free`d][free_result]
 #[no_mangle]
@@ -305,7 +312,7 @@ pub extern "system" fn open_ro(size: Option<NonZeroUsize>, name: FfiStr, namespa
                         inner.push(mapped);
                         let count = inner.len() - 1;
                         _ = CURRENT.compare_exchange(0, count, Ordering::Acquire, Ordering::Relaxed);
-                        vec![0; count]
+                        vec![count.min(0xFF) as u8; count] // clamp and truncate
                     })
                     .map(|mut ret| {
                         let ptr = ret.as_mut_ptr();
