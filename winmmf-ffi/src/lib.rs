@@ -162,6 +162,7 @@ pub unsafe extern "system" fn read_buf(mmf_idx: Option<NonZeroUsize>, count: usi
 /// The pointer produced from this function **must** be freed using [`free_result`], regardless of error state.
 /// To this end, the returned pointer will _always_ have enough size behind it to fit the entire mapped view. Before
 /// freeing it, this pointer may also be used with [read_buf] so you know you have a safe pointer to work with.
+/// To further support this, passing a `count` of 0 returns a fresh buffer
 ///
 /// If something went wrong, the data behind the pointer will be an error code, right padded with `0xFF` until the end
 /// of the requested buffer. If no size is provided, the returned pointer will be the length of the current active MMF.
@@ -176,7 +177,11 @@ pub extern "system" fn read(mmf_idx: Option<NonZeroUsize>, count: usize) -> *mut
                         .get(mmf_idx.map(|nsu| nsu.get()).unwrap_or_else(|| CURRENT.load(Ordering::Acquire)))
                         .map(|mmf| {
                             if count == 0 {
-                                null_mut()
+                                let mut ret = vec![0; mmf.size()];
+                                ret.shrink_to_fit();
+                                let ptr = ret.as_mut_ptr();
+                                std::mem::forget(ret);
+                                ptr
                             } else {
                                 let mut ret = Vec::new();
                                 let ptr = ret.as_mut_ptr();
@@ -198,6 +203,7 @@ pub extern "system" fn read(mmf_idx: Option<NonZeroUsize>, count: usize) -> *mut
                                         _ => -4_i8, */
                                         ret = vec![0xFF; mmf.size()];
                                         ret[0] = val as u8;
+                                        ret.shrink_to_fit();
                                         std::mem::forget(ret);
                                         ptr
                                     }
@@ -232,4 +238,46 @@ pub extern "system" fn free_result(mmf_idx: Option<NonZeroUsize>, res: *mut u8) 
 #[no_mangle]
 pub unsafe extern "system" fn free_raw(res: *mut u8, size: usize) {
     drop(Vec::from_raw_parts(res, size, size))
+}
+
+/// Expose writing data as well. Slightly less complex for FFI purposes than reading.
+///
+/// Return values for this function are:
+/// - 0: Write was successful!
+/// - -1: Writing not allowed (readonly or closed)
+/// - -2: Buffer is bigger than the MMF
+/// - -3: Uninitialized
+/// - -4: Read- or WriteLocked
+/// - -5: Programmer issue
+#[no_mangle]
+pub extern "system" fn write(mmf_idx: Option<NonZeroUsize>, data: *mut u8, size: usize) -> isize {
+    if data.is_null() {
+        -5
+    } else if size > 0 {
+        MMFS.get()
+            .map(|inner| {
+                inner
+                    .lock()
+                    .map(|inner| {
+                        inner
+                            .get(mmf_idx.map(|nsu| nsu.get()).unwrap_or_else(|| CURRENT.load(Ordering::Acquire)))
+                            .map(|mmf| {
+                                let buff = unsafe { std::slice::from_raw_parts_mut(data, size) };
+                                match mmf.write(buff) {
+                                    Ok(_) => 0,
+                                    Err(Error::MMF_NotFound) => -1,
+                                    Err(Error::NotEnoughMemory) => -2,
+                                    Err(Error::Uninitialized) => -3,
+                                    Err(Error::ReadLocked) | Err(Error::WriteLocked) => -4,
+                                    _ => -5,
+                                }
+                            })
+                            .unwrap_or(-3)
+                    })
+                    .unwrap_or(-5)
+            })
+            .unwrap_or(-5)
+    } else {
+        0 // Copying zero bytes is always successful.
+    }
 }
