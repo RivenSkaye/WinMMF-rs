@@ -13,7 +13,7 @@
 
 [dependencies]
     ffi-support = {version = "0.4"}
-    winmmf      = {path = "../winmmf"}
+    winmmf      = {path = "../winmmf", version = "0.2.0"}
 
 [package.metadata.docs.rs]
     default-target = "x86_64-pc-windows-msvc"
