@@ -9,7 +9,8 @@
     name                 = "winmmf-ffi"
     readme               = "README.md"
     repository.workspace = true
-    version              = "0.2.1"
+    rust-version         = "1.75"
+    version              = "0.2.2"
 
 [dependencies]
     ffi-support = {version = "0.4"}

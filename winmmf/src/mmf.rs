@@ -309,7 +309,10 @@ impl<LOCK: MMFLock> MemoryMappedFile<LOCK> {
         // Safety: microSEH handles the OS side of this error, and the match handles this end.
         match try_seh(|| unsafe { CloseHandle(self.handle) })?.map_err(MMFError::from) {
             Err(MMFError::OS_OK(_)) | Ok(_) => Ok(()),
-            err => err.inspect_err(|e| eprintln!("Error closing MMF's handle: {:#?}", e)),
+            err => err.map_err(|e| {
+                eprintln!("Error closing MMF's handle: {:#?}", e);
+                e
+            }),
         }
     }
 }
@@ -480,7 +483,10 @@ impl MemoryMappedView {
     fn unmap(&self) -> MMFResult<()> {
         match try_seh(|| unsafe { UnmapViewOfFile(self.address) })?.map_err(MMFError::from) {
             Err(MMFError::OS_OK(_)) | Ok(_) => Ok(()),
-            err => err.inspect_err(|e| eprintln!("Error unmapping the view of the MMF: {:#?}", e)),
+            err => err.map_err(|e| {
+                eprintln!("Error unmapping the view of the MMF: {:#?}", e);
+                e
+            }),
         }
     }
 }

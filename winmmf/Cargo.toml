@@ -9,7 +9,8 @@
     name                 = "winmmf"
     readme               = "README.md"
     repository.workspace = true
-    version.workspace    = true
+    rust-version         = "1.75"
+    version              = "0.2.1"
 
 [dependencies]
     fixedstr = {version = "0.5.8", features = ["std"]}
