@@ -8,7 +8,17 @@ No guarantees are made about bindgen outputs. I would expect it to provide well-
 
 ## Wrappers for languages
 
-A brief list of the language for which bindgen exists and an effort is being made to keep it officially supported. The bindgen output can be enabled in ways that are to be determined. I'd want to say feature flags, but `build.rs` ignores those.
+Are you missing a language? Feel free to PR it in!
 
-- C# (WIP)
-- More to come
+A brief summary of the language for which bindgen exists and an effort is being made to keep it officially supported. The bindgen output can be enabled through custom config flags that optionally let you set the output filename, but with sane defaults. Flags can be provided in the following forms:
+
+- `--cfg gen<LANG>` OR
+- `--cfg gen<LANG>=outfile.name`
+
+Where `<LANG>` is the value listed behind the language name. The generated file(s) can be found in `$OUT_DIR/../../generated/`, e.g. `./target/debug/build/generated/`
+
+For ease of use, the table below includes the actual flag values.
+
+| Language | Value | Flag  |                     Bindgen                     |
+|----------|-------|-------|-------------------------------------------------|
+| C#       | CS    | gencs | [csbindgen](https://crates.io/crates/csbindgen) |
