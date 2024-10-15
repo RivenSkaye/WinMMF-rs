@@ -69,9 +69,9 @@ pub extern "system" fn open(size: Option<NonZeroUsize>, name: FfiStr, namespace:
                     .lock()
                     .map(|mut inner| {
                         inner.push(mapped);
-                        let idx = inner.len();
+                        let idx = inner.len() - 1;
                         _ = CURRENT.compare_exchange(0, idx, Ordering::Acquire, Ordering::Relaxed);
-                        (idx - 1) as isize
+                        idx as isize
                     })
                     .unwrap_or(-5)
             } else {
@@ -103,9 +103,9 @@ pub extern "system" fn new(size: Option<NonZeroUsize>, name: FfiStr, namespace: 
                     .lock()
                     .map(|mut inner| {
                         inner.push(mapped);
-                        let idx = inner.len();
+                        let idx = inner.len() - 1;
                         _ = CURRENT.compare_exchange(0, idx, Ordering::Acquire, Ordering::Relaxed);
-                        (idx - 1) as isize
+                        idx as isize
                     })
                     .unwrap_or(-5)
             } else {
@@ -220,10 +220,7 @@ pub extern "system" fn free_result(mmf_idx: Option<NonZeroUsize>, res: *mut u8) 
                 .map(|inner| {
                     inner
                         .get(mmf_idx.map(|nsu| nsu.get()).unwrap_or_else(|| CURRENT.load(Ordering::Acquire)))
-                        .map(|mmf| unsafe {
-                            let resvec = Vec::from_raw_parts(res, mmf.size(), mmf.size());
-                            drop(resvec)
-                        })
+                        .map(|mmf| unsafe { free_raw(res, mmf.size()) })
                         .unwrap_or(())
                 })
                 .unwrap_or(())
