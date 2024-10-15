@@ -22,7 +22,7 @@ jobs:
           toolchain: nightly
           components: rustfmt
       - name: rustfmt
-        run: cargo fmt --check
+        run: cargo fmt --check --package ${{matrix.package}}
 
   clippy:
     name: Clippy  ${{matrix.package}}
@@ -39,4 +39,4 @@ jobs:
           toolchain: nightly
           components: clippy
       - name: clippy
-        run: cargo clippy
+        run: cargo clippy --package ${{matrix.package}}
