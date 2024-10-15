@@ -9,7 +9,7 @@
     name                 = "winmmf-ffi"
     readme               = "README.md"
     repository.workspace = true
-    version              = "0.1.0"
+    version.workspace    = true
 
 [dependencies]
     ffi-support = {version = "0.4"}
