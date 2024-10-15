@@ -122,6 +122,9 @@ pub extern "system" fn new(size: Option<NonZeroUsize>, name: FfiStr, namespace: 
 /// exactly `count` items long.
 /// Return values are negative integers for errors, or 0 for success.
 ///
+/// # Safety
+/// Ensure `buff` is valid for at least `count` bytes and all will be well.
+///
 /// - -1: No MMFs opened yet
 /// - -2: MMF is closed
 /// - -3: MMF isn't initialized
@@ -217,6 +220,7 @@ pub extern "system" fn read(mmf_idx: Option<NonZeroUsize>, count: usize) -> *mut
 
 /// Free a pointer used for reading from an MMF by its index number.
 ///
+/// # Safety
 /// Do not pass pointers not received from this library. Doing so is UB by definition.
 /// Null pointers will be silently ignored.
 #[no_mangle]
@@ -239,13 +243,21 @@ pub unsafe extern "system" fn free_result(mmf_idx: Option<NonZeroUsize>, res: *m
         .unwrap_or(())
 }
 
-/// You had better know how big that thing is
+/// You had better know how big that thing is.
+///
+/// # Safety
+///
+/// If the provided size is incorrect, you might be leaking bytes (too small, mostly harmless) or you might be invoking
+/// UB (too large, harmful to the universe). If you're just gambling the size, I hope you anger the Duolingo bird.
 #[no_mangle]
 pub unsafe extern "system" fn free_raw(res: *mut u8, size: usize) {
     drop(Vec::from_raw_parts(res, size, size))
 }
 
 /// Expose writing data as well. Slightly less complex for FFI purposes than reading.
+///
+/// # Safety
+/// `data` must be at least `count` bytes long, or somebody's getting hurt.
 ///
 /// Return values for this function are:
 /// - 0: Write was successful!
@@ -255,7 +267,7 @@ pub unsafe extern "system" fn free_raw(res: *mut u8, size: usize) {
 /// - -4: Read- or WriteLocked
 /// - -5: Programmer issue
 #[no_mangle]
-pub extern "system" fn write(mmf_idx: Option<NonZeroUsize>, data: *mut u8, size: usize) -> isize {
+pub unsafe extern "system" fn write(mmf_idx: Option<NonZeroUsize>, data: *mut u8, size: usize) -> isize {
     if data.is_null() {
         -5
     } else if size > 0 {
