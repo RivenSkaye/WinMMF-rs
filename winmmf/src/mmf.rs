@@ -317,7 +317,8 @@ impl<LOCK: MMFLock> MemoryMappedFile<LOCK> {
 /// Implements a usable file-like interface for working with an MMF. Pass all input as bytes, please.
 #[cfg(feature = "impl_mmf")]
 impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
-    /// Attempts to read the entirety of the data as defined in [`Self::size`].
+    /// Attempts to read bytes up to the entirety of the data as defined in [`Self::size`].
+    ///
     /// This function succeeds if there is a value in [`Self::map_view`] but it cannot guarantee the data returned is
     /// correct. This is an unfortunate side effect of having to work with raw pointers and bytes in memory.
     /// Assuming nothing external has touched the memory region other than this class, it _should_ be valid data unless
@@ -326,7 +327,6 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
     ///
     /// - 1: Write Protected; the file has a write lock on it which means reading might return incomplete data, or the
     ///   maximum amount of readers has been reached (this should not happen assuming all implementations are clean).
-    /// These errors use the most similar error codes from the system API:
     /// - 2: Invalid block; the lock is telling us this data has not yet been initialized.
     /// - 5: File not found; the MMF isn't opened yet or no map view exists.
     #[inline]
