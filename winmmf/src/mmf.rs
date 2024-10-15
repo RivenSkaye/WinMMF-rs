@@ -370,16 +370,20 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
         }
     }
 
-    /// See the documentation for [Self::read()], except this takes a buffer to write to.
+    /// Read into a raw pointer and pray it's valid for `count` bytes.
     ///
-    /// If the count is 0, the entire MMF will be read into the buffer. If the buffer is smaller than the amount of data
-    /// to be read, it _will be grown_ to fit the requested data, using [`Vec::reserve_exact`].The returned error for
-    /// this is an instance of the [crate's error enum][crate::err::Error]
+    /// If the count is 0, this operation will exit with a [non-specific error][MMFError::GeneralFailure]. This method
+    /// provides a best effort to ensure that the read portion of the copy is sound by clamping `count` to the MMFs
+    /// size. This prevents, at the very least, UB from reading beyond the end of the MMF. It also ensures the MMF is
+    /// opened and initialized, with the usual errors from [`read`][Self::read] to make these problems known to callers.
+    /// It is the caller's responsibility to ensure that `buffer` is valid for at least `count` bytes. Failing to do so
+    /// is UB. See the documentation for [`std::ptr::copy`] for safety concerns, the provided `buffer` is the `dst`.
     unsafe fn read_to_raw(&self, buffer: &[u8], count: usize) -> Result<(), MMFError> {
         if self.closed.get() {
-            return Err(MMFError::MMF_NotFound);
-        }
-        if self.map_view.is_some() {
+            Err(MMFError::MMF_NotFound)
+        } else if count == 0 {
+            Err(MMFError::GeneralFailure)
+        } else if self.map_view.is_some() {
             if !self.lock.initialized() {
                 return Err(MMFError::Uninitialized);
             }
@@ -392,7 +396,7 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
                 // than what fits in the buffer. If someone gave us a dirty slice, that's on them. Notably, they would
                 // get UB from providing a slice with an incorrect internally registered length.
                 unsafe {
-                    self.write_ptr.copy_to(buffer.as_ptr().cast_mut(), count);
+                    self.write_ptr.copy_to(buffer.as_ptr().cast_mut(), count.min(self.size));
                 }
                 self.lock.unlock_read().unwrap();
                 Ok(())
