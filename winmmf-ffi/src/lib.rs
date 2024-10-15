@@ -1,5 +1,3 @@
-#![feature(let_chains)]
-
 //! # An FFI interface for WinMMF
 //!
 //! The recommended way of working with this interface is therefore to call this function for the first read, reuse the
