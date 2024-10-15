@@ -281,3 +281,41 @@ pub extern "system" fn write(mmf_idx: Option<NonZeroUsize>, data: *mut u8, size:
         0 // Copying zero bytes is always successful.
     }
 }
+
+/// Convenience function to open a read-only MMF and get a usable pointer for future read calls.
+///
+/// - If you pass in a size of 0, you get a null pointer.
+/// - If you don't provide a usable name, you get a null pointer.
+/// - If you pass an invalid namespace, you get a null pointer.
+/// - If the returned pointer is not null, it's valid until you close the MMF. The first byte behind it will be its
+///   index, unless you have more than 256 MMFs open. Please don't open that many...
+///
+/// This pointer still has to be [`free`d][free_result]
+#[no_mangle]
+pub extern "system" fn open_ro(size: Option<NonZeroUsize>, name: FfiStr, namespace: u8) -> *mut u8 {
+    match (size, name.as_opt_str(), namespace.try_into()) {
+        (None, _, _) => null_mut(),
+        (_, None, _) => null_mut(),
+        (_, _, Err(_)) => null_mut(),
+        (Some(size), Some(namestr), Ok(ns)) => {
+            if let Ok(mapped) = MemoryMappedFile::open(size, namestr, ns, true) {
+                MMFS.get_or_init(|| _init(1))
+                    .lock()
+                    .map(|mut inner| {
+                        inner.push(mapped);
+                        let count = inner.len() - 1;
+                        _ = CURRENT.compare_exchange(0, count, Ordering::Acquire, Ordering::Relaxed);
+                        vec![0; count]
+                    })
+                    .map(|mut ret| {
+                        let ptr = ret.as_mut_ptr();
+                        std::mem::forget(ret);
+                        ptr
+                    })
+                    .unwrap_or(null_mut())
+            } else {
+                null_mut()
+            }
+        }
+    }
+}
