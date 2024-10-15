@@ -326,3 +326,13 @@ pub extern "system" fn open_ro(size: Option<NonZeroUsize>, name: FfiStr, namespa
         }
     }
 }
+
+/// Close the MMF
+///
+/// Closes the specific instance stored here without interferring with other processes that might be using it.
+#[no_mangle]
+pub extern "system" fn close(mmf_idx: usize) {
+    MMFS.get()
+        .map(|inner| inner.lock().map(|mut inner| drop(inner.remove(mmf_idx))).unwrap_or_default())
+        .unwrap_or_default()
+}
