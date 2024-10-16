@@ -405,7 +405,7 @@ impl MMFLock for RWLock<'_> {
                 return Err(Error::WriteLocked);
             }
         }
-        return Ok(());
+        Ok(())
     }
 
     /// Very crude implementation of spinning with no backoff
@@ -420,6 +420,6 @@ impl MMFLock for RWLock<'_> {
                 return Err(Error::LockViolation);
             }
         }
-        return Ok(());
+        Ok(())
     }
 }
