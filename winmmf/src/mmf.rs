@@ -114,6 +114,38 @@ pub trait Mmf {
     fn size(&self) -> usize;
     /// Write data to the MMF.
     fn write(&self, buffer: &[u8]) -> MMFResult<()>;
+    /// Spin for `tries` times max, or until reading is allowed.
+    ///
+    /// This method takes an optional spinning function that returns a result. The spinning function must acquire the
+    /// lock, and this function must unlock.
+    fn read_spin<F>(&self, count: usize, spinner: Option<F>) -> MMFResult<Vec<u8>>
+    where
+        F: FnMut(&dyn MMFLock, usize) -> MMFResult<()>;
+    /// Spin for `tries` times max, or until reading is allowed.
+    ///
+    /// This method takes an optional spinning function that returns a result. The spinning function must acquire the
+    /// lock, and this function must unlock.
+    fn read_to_buf_spin<F>(&self, buffer: &mut Vec<u8>, count: usize, spinner: Option<F>) -> MMFResult<()>
+    where
+        F: FnMut(&dyn MMFLock, usize) -> MMFResult<()>;
+    /// Spin for `tries` times max, or until reading is allowed.
+    ///
+    /// # Safety
+    /// See [`read_to_raw`][Mmf::read_to_raw]
+    ///
+    /// This method takes an optional spinning function that returns a result. The spinning function must acquire the
+    /// lock, and this function must unlock.
+    unsafe fn read_to_raw_spin<F>(&self, buffer: *mut u8, count: usize, spinner: Option<F>) -> MMFResult<()>
+    where
+        F: FnMut(&dyn MMFLock, usize) -> MMFResult<()>;
+    /// Spin for `tries` times max, or until writing is allowed.
+    ///
+    /// This method takes an optional spinning function that returns a result. The spinning function must acquire the
+    /// lock, and this function must unlock.
+    /// Defaults to [the one in `RWLock`][crate::states::RWLock]
+    fn write_spin<F>(&self, buffer: &[u8], spinner: Option<F>) -> MMFResult<()>
+    where
+        F: FnMut(&dyn MMFLock, usize) -> MMFResult<()>;
 }
 
 /// A simple struct wrapping a [Memory Mapped File](https://learn.microsoft.com/en-us/windows/win32/memory/creating-named-shared-memory).
@@ -334,46 +366,56 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
     /// - 5: File not found; the MMF isn't opened yet or no map view exists.
     #[inline]
     fn read(&self, count: usize) -> Result<Vec<u8>, MMFError> {
-        if self.closed.get() {
-            return Err(MMFError::MMF_NotFound);
-        }
         let mut buf = Vec::with_capacity(self.size);
         self.read_to_buf(&mut buf, count)?;
+        Ok(buf)
+    }
+
+    /// Spinning form of [`read`][Self::read]
+    fn read_spin<F>(&self, count: usize, spinner: Option<F>) -> MMFResult<Vec<u8>>
+    where
+        F: FnMut(&dyn MMFLock, usize) -> MMFResult<()>,
+    {
+        let mut buf = Vec::with_capacity(self.size);
+        self.read_to_buf_spin(&mut buf, count, spinner)?;
         Ok(buf)
     }
 
     /// See the documentation for [Self::read()], except this takes a buffer to write to.
     ///
     /// If the count is 0, the entire MMF will be read into the buffer. If the buffer is smaller than the amount of data
-    /// to be read, it _will be grown_ to fit the requested data, using [`Vec::reserve_exact`].The returned error for
+    /// to be read, it _will be grown_ to fit the requested data, using [`Vec::reserve_exact`]. The returned error for
     /// this is an instance of the [crate's error enum][crate::err::Error]
-    fn read_to_buf(&self, buffer: &mut Vec<u8>, count: usize) -> Result<(), MMFError> {
-        if self.closed.get() {
-            return Err(MMFError::MMF_NotFound);
-        }
+    fn read_to_buf(&self, buffer: &mut Vec<u8>, count: usize) -> MMFResult<()> {
         let buf_cap = buffer.capacity();
-        let to_read = buf_cap.min(if count == 0 { self.size } else { count });
-        if self.map_view.is_some() {
-            if !self.lock.initialized() {
-                return Err(MMFError::Uninitialized);
-            }
-            self.lock.lock_read()?;
+        let to_read = if count == 0 { self.size } else { count };
 
-            if buf_cap < to_read {
-                buffer.reserve_exact(to_read - buf_cap);
-            }
-            // safety: memory may overlap with copy_to. With the size check, we also ensure we don't copy more bytes
-            // than what fits in the target Vec. If someone gave us a dirty Vec, that's on them. Notably, that would
-            // cause the same kind of problems in safe code, because a dirty Vec violates soundness.
-            unsafe {
-                buffer.set_len(to_read);
-                self.write_ptr.copy_to(buffer.as_mut_ptr(), to_read);
-            }
-            self.lock.unlock_read().unwrap();
-            Ok(())
-        } else {
-            Err(MMFError::MMF_NotFound)
+        if buf_cap < to_read {
+            buffer.reserve_exact(to_read - buf_cap);
         }
+        unsafe {
+            self.read_to_raw(buffer.as_mut_ptr(), count)?;
+            buffer.set_len(to_read);
+        }
+        Ok(())
+    }
+
+    /// Spinning version of [`read_to_buf`][Self::read_to_buf]
+    fn read_to_buf_spin<F>(&self, buffer: &mut Vec<u8>, count: usize, spinner: Option<F>) -> MMFResult<()>
+    where
+        F: FnMut(&dyn MMFLock, usize) -> MMFResult<()>,
+    {
+        let buf_cap = buffer.capacity();
+        let to_read = if count == 0 { self.size } else { count };
+
+        if buf_cap < to_read {
+            buffer.reserve_exact(to_read - buf_cap);
+        }
+        unsafe {
+            self.read_to_raw_spin(buffer.as_mut_ptr(), count, spinner)?;
+            buffer.set_len(to_read);
+        }
+        Ok(())
     }
 
     /// Read into a raw pointer and pray it's valid for `count` bytes.
@@ -382,6 +424,8 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
     /// provides a best effort to ensure that the read portion of the copy is sound by clamping `count` to the MMFs
     /// size. This prevents, at the very least, UB from reading beyond the end of the MMF. It also ensures the MMF is
     /// opened and initialized, with the usual errors from [`read`][Self::read] to make these problems known to callers.
+    ///
+    /// # Safety
     /// It is the caller's responsibility to ensure that `buffer` is valid for at least `count` bytes. Failing to do so
     /// is UB. See the documentation for [`std::ptr::copy`] for safety concerns, the provided `buffer` is the `dst`.
     unsafe fn read_to_raw(&self, buffer: *mut u8, count: usize) -> Result<(), MMFError> {
@@ -398,6 +442,39 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
             // safety: memory may overlap with copy_to. With the size check, we also ensure we don't copy more bytes
             // than what fits in the buffer. If someone gave us a dirty slice, that's on them. Notably, they would
             // get UB from providing a slice with an incorrect internally registered length.
+            unsafe {
+                self.write_ptr.copy_to(buffer, count.min(self.size));
+            }
+            self.lock.unlock_read().unwrap();
+            Ok(())
+        } else {
+            Err(MMFError::MMF_NotFound)
+        }
+    }
+
+    /// Spinning version of [`read_to_raw`][Self::read_to_raw]
+    ///
+    /// # Safety
+    /// It is the caller's responsibility to ensure that `buffer` is valid for at least `count` bytes. Failing to do so
+    /// is UB. See the documentation for [`std::ptr::copy`] for safety concerns, the provided `buffer` is the `dst`.
+    unsafe fn read_to_raw_spin<F>(&self, buffer: *mut u8, count: usize, spinner: Option<F>) -> MMFResult<()>
+    where
+        F: FnMut(&dyn MMFLock, usize) -> MMFResult<()>,
+    {
+        if self.closed.get() {
+            Err(MMFError::MMF_NotFound)
+        } else if count == 0 {
+            Err(MMFError::GeneralFailure)
+        } else if self.map_view.is_some() {
+            if let Some(mut spinner) = spinner {
+                spinner(&self.lock, usize::MAX)?;
+            } else {
+                LOCK::spin_and_lock_read(&self.lock, usize::MAX)?;
+            }
+
+            // safety: memory may be overlapped with copy_to. With the size check, we also ensure we don't copy more
+            // bytes than what fits in the buffer. If someone gave us a dirty slice, that's on them.
+            // Notably, they would get UB from providing a pointer with too little space.
             unsafe {
                 self.write_ptr.copy_to(buffer, count.min(self.size));
             }
@@ -426,18 +503,14 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
         }
         let cap = buffer.len().min(self.size);
         if cap < buffer.len() {
-            return Err(MMFError::NotEnoughMemory);
-        }
-        if !self.lock.initialized() {
-            return Err(MMFError::Uninitialized);
-        }
-        if self.lock.readlocked() {
-            return Err(MMFError::ReadLocked);
-        }
-        if self.lock.writelocked() {
-            return Err(MMFError::WriteLocked);
-        }
-        if self.map_view.is_some() {
+            Err(MMFError::NotEnoughMemory)
+        } else if !self.lock.initialized() {
+            Err(MMFError::Uninitialized)
+        } else if self.lock.readlocked() {
+            Err(MMFError::ReadLocked)
+        } else if self.lock.writelocked() {
+            Err(MMFError::WriteLocked)
+        } else if self.map_view.is_some() {
             self.lock.lock_write()?;
             let src_ptr = buffer.as_ptr();
             // We ensured this size is correct and filled out when instantiating the MMF, this is just writing the same
@@ -445,7 +518,33 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
             unsafe { src_ptr.copy_to(self.write_ptr, cap) };
             self.lock.unlock_write()
         } else {
-            Err(MMFError::Uninitialized)
+            Err(MMFError::MMF_NotFound)
+        }
+    }
+
+    fn write_spin<F>(&self, buffer: &[u8], spinner: Option<F>) -> MMFResult<()>
+    where
+        F: FnMut(&dyn MMFLock, usize) -> MMFResult<()>,
+    {
+        if self.readonly || self.closed.get() {
+            return Err(MMFError::MMF_NotFound);
+        }
+        let cap = buffer.len().min(self.size);
+        if cap < buffer.len() {
+            Err(MMFError::NotEnoughMemory)
+        } else if self.map_view.is_some() {
+            if let Some(mut spinner) = spinner {
+                spinner(&self.lock, usize::MAX)?;
+            } else {
+                LOCK::spin_and_lock_write(&self.lock, usize::MAX)?;
+            }
+            let src_ptr = buffer.as_ptr();
+            // We ensured this size is correct and filled out when instantiating the MMF, this is just writing the same
+            // amount of bytes to the same place in memory.
+            unsafe { src_ptr.copy_to(self.write_ptr, cap) };
+            self.lock.unlock_write()
+        } else {
+            Err(MMFError::MMF_NotFound)
         }
     }
 
