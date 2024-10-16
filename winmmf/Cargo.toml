@@ -41,4 +41,4 @@
     # sorry folks, but this lib is only meant to be used from other Rust crates.
     # Use winmmf-ffi if you want a cdylib with exported symbols that aren't clobbered or mangled.
     bench      = false
-    crate-type = ["dylib", "lib", "rlib"]
+    crate-type = ["dylib", "rlib"]
