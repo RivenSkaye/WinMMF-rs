@@ -56,6 +56,14 @@ pub trait MMFLock {
     fn unlock_write(&self) -> MMFResult<()>;
     /// Spin and return true while the lock is held
     fn spin(&self, tries: &mut usize) -> MMFResult<bool>;
+    /// Spin until the lock can be taken, then take it.
+    fn spin_and_lock_read(lock: &Self, max_tries: usize) -> MMFResult<()>
+    where
+        Self: Sized;
+    /// Spin until the lock can be taken, then take it.
+    fn spin_and_lock_write(lock: &Self, max_tries: usize) -> MMFResult<()>
+    where
+        Self: Sized;
     /// Create a new lock at the location of an existing pointer.
     ///
     /// # Safety
@@ -120,7 +128,7 @@ impl fmt::Debug for dyn MMFLock {
 #[cfg(feature = "impl_lock")]
 #[derive(Debug)]
 pub struct RWLock<'a> {
-    /// An Atomic reference to the first 8 bytes in the MemoryMappedView.
+    /// An Atomic reference to the first 4 bytes in the MemoryMappedView.
     /// Alignment is not an issue considering Windows aligns views to pointers by default.
     chunk: &'a AtomicU32,
     /// Current internal lock state, used to prevent us from releasing locks we don't hold.
@@ -203,20 +211,22 @@ impl MMFLock for RWLock<'_> {
     /// The same safety bounds apply as for `from_existing` with the exception of poisoned lock risks. It does mean,
     /// however, that it invalidates any other locks that use the same pointer and clears any data.
     unsafe fn from_raw(pointer: *mut u8) -> Self {
-        let lock = Self::from_existing(pointer);
+        if pointer.is_null() {
+            panic!("Never, ever pass a null pointer into a lock!")
+        }
+        let lock = Self { chunk: AtomicU32::from_ptr(pointer.cast()), current_lock: AtomicU8::new(255) };
         lock.chunk.store(Self::INITIALIZE_MASK, Ordering::Release);
         lock
     }
 
-    /// Mark this lock as initialized. This will clear any existing lock state, so make sure no locks are taken.
+    /// Mark this lock as initialized if it isn't yet.
     ///
-    /// The choice to clear all locks upon setting the init state was made to accommodate uses of
-    /// [`Self::from_existing`] where it's reasonable to assume no locks are taken or the code using it handles the
-    /// situation where the locks are cleared internally.
+    /// In pre-0.3 versions of this crate, this would clear existing locks. This is a bad idea though, as a naive caller
+    /// might not realize they're not the only process using the MMF.
     fn set_init(&self) {
         fence(Ordering::AcqRel);
-        self.chunk.store(0, Ordering::Release);
-        self.current_lock.store(0, Ordering::Release);
+        _ = self.chunk.compare_exchange(Self::INITIALIZE_MASK, 0, Ordering::Release, Ordering::Relaxed);
+        _ = self.current_lock.compare_exchange(255, 0, Ordering::Release, Ordering::Relaxed);
         fence(Ordering::AcqRel);
     }
 
@@ -266,16 +276,11 @@ impl MMFLock for RWLock<'_> {
             || (self.current_lock.load(Ordering::Acquire) & Self::HOLDING_W) == Self::HOLDING_W
     }
 
-    /// Check if the lock is held at all.
-    ///
-    /// This compares using the initialization mask is done in a similar vein to niche optimizations;
-    /// it should never be possible to hold read _and_ write locks. Similarly, if we hold no internal
-    /// locks, our internal lock state is guaranteed to be zero.
+    /// Check if the locks are any non-zero value. Uninitialized locks are considered held.
     #[inline(always)]
     fn locked(&self) -> bool {
         fence(Ordering::AcqRel);
-        (self.chunk.load(Ordering::Acquire) & Self::INITIALIZE_MASK) < Self::INITIALIZE_MASK
-            || self.current_lock.load(Ordering::Acquire) > 0
+        self.chunk.load(Ordering::Acquire) > 0 || self.current_lock.load(Ordering::Acquire) > 0
     }
 
     /// Increment the counter for read locks ***if and only if*** we can safely lock this for reading
@@ -386,5 +391,35 @@ impl MMFLock for RWLock<'_> {
         } else {
             Ok(held)
         }
+    }
+
+    /// Very crude implementation of spinning with no backoff
+    fn spin_and_lock_read(lock: &Self, max_tries: usize) -> MMFResult<()> {
+        let mut tries = 0;
+        if !lock.initialized() {
+            return Err(Error::Uninitialized);
+        }
+        while lock.lock_read().is_err() {
+            tries += 1;
+            if tries >= max_tries {
+                return Err(Error::WriteLocked);
+            }
+        }
+        return Ok(());
+    }
+
+    /// Very crude implementation of spinning with no backoff
+    fn spin_and_lock_write(lock: &Self, max_tries: usize) -> MMFResult<()> {
+        let mut tries = 0;
+        if !lock.initialized() {
+            return Err(Error::Uninitialized);
+        }
+        while lock.lock_write().is_err() {
+            tries += 1;
+            if tries >= max_tries {
+                return Err(Error::LockViolation);
+            }
+        }
+        return Ok(());
     }
 }
