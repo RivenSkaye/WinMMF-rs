@@ -3,7 +3,7 @@
     resolver = "2"
 
     [workspace.package]
-        authors     = ["Riven Skaye <riven@tae.moe"]
+        authors     = ["Riven Skaye <riven@tae.moe>"]
         categories  = ["filesystem", "memory-management", "os::windows-apis"]
         description = "Crates to use Windows' Memory Mapped Files with Rust. Now including FFI!"
         edition     = "2021"
