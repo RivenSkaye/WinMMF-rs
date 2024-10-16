@@ -10,11 +10,11 @@
     readme               = "README.md"
     repository.workspace = true
     rust-version         = "1.75"
-    version              = "0.2.2"
+    version.workspace    = true
 
 [dependencies]
     ffi-support = {version = "0.4"}
-    winmmf      = {path = "../winmmf", version = "0.2"}
+    winmmf      = {path = "../winmmf", version = "0.3"}
 
 [build-dependencies]
     csbindgen = "1.9"
