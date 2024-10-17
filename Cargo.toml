@@ -13,3 +13,11 @@
         readme      = "README.md"
         repository  = "https://github.com/RivenSkaye/WinMMF-rs"
         version     = "0.3.0"
+
+[profile.minimize]
+    codegen-units = 1
+    inherits      = "release"
+    lto           = "fat"
+    opt-level     = 2
+    panic         = "unwind"
+    strip         = "debuginfo"
