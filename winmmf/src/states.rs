@@ -351,7 +351,7 @@ impl MMFLock for RWLock<'_> {
         while match lock.lock_read() {
             Ok(_) => false,
             Err(Error::WriteLocked) => true,
-            Err(err) => return Err(err),
+            err => return err,
         } {
             tries += 1;
             if tries >= max_tries {
@@ -369,7 +369,7 @@ impl MMFLock for RWLock<'_> {
         while match lock.lock_write() {
             Ok(_) => false,
             Err(Error::WriteLocked | Error::ReadLocked) => true,
-            Err(err) => return Err(err),
+            err => return err,
         } {
             tries += 1;
             if tries >= max_tries {
