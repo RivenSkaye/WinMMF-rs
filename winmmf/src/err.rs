@@ -11,7 +11,7 @@ use windows::core::{Error as WErr, HRESULT};
 
 /// Errors used with Memory-Mapped Files.
 #[allow(non_camel_case_types)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[repr(u8)]
 pub enum Error {
     /// Readlocked, don't write.
