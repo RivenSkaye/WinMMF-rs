@@ -130,11 +130,6 @@ impl RWLock<'_> {
     fn writelocked(chunk: u32) -> bool {
         (chunk & Self::WRITE_LOCK_MASK) == Self::WRITE_LOCK_MASK
     }
-
-    /// Check if the locks are any non-zero value. Uninitialized locks are considered held.
-    fn locked(chunk: u32) -> bool {
-        chunk > 0
-    }
 }
 
 #[cfg(feature = "impl_lock")]
@@ -379,7 +374,7 @@ impl MMFLock for RWLock<'_> {
     fn spin_and_lock_write(lock: &Self, max_tries: usize) -> MMFResult<()> {
         let mut tries = 0;
 
-        while match lock.lock_read() {
+        while match lock.lock_write() {
             Ok(_) => false,
             Err(Error::WriteLocked | Error::ReadLocked) => true,
             Err(err) => return Err(err),
