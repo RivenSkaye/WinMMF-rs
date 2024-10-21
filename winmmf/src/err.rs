@@ -100,6 +100,7 @@ impl fmt::Display for Error {
             Self::MMF_NotFound => Cow::from("E002: No memory mapped file has been opened yet!"),
             Self::Uninitialized => Cow::from("Memory Mapped File was not yet initialized"),
             Self::MaxReaders => Cow::from("The maximum amount of readers is already registered"),
+            Self::MaxTriesReached => Cow::from("The maximum amount of tries was reached spinning"),
             Self::GeneralFailure => Cow::from("No idea what the hell happened here..."),
             Self::OS_Err(c) => Cow::from(format!("E{c:02}: Generic OS Error")),
         };
