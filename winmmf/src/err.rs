@@ -29,6 +29,7 @@ pub enum Error {
     MMF_NotFound = 5,
     /// Something else was racing you, this is scary.
     LockViolation = 6,
+    /// Spinlocks spun for the maximum amount of tries allowed
     MaxTriesReached = 7,
     /// No explanation, only errors
     GeneralFailure = 253,
