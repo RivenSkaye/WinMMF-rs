@@ -506,10 +506,6 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
             Err(MMFError::NotEnoughMemory)
         } else if !self.lock.initialized() {
             Err(MMFError::Uninitialized)
-        } else if self.lock.readlocked() {
-            Err(MMFError::ReadLocked)
-        } else if self.lock.writelocked() {
-            Err(MMFError::WriteLocked)
         } else if self.map_view.is_some() {
             self.lock.lock_write()?;
             let src_ptr = buffer.as_ptr();

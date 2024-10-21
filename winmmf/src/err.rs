@@ -11,7 +11,7 @@ use windows::core::{Error as WErr, HRESULT};
 
 /// Errors used with Memory-Mapped Files.
 #[allow(non_camel_case_types)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[repr(u8)]
 pub enum Error {
     /// Readlocked, don't write.
@@ -29,6 +29,8 @@ pub enum Error {
     MMF_NotFound = 5,
     /// Something else was racing you, this is scary.
     LockViolation = 6,
+    /// Spinlocks spun for the maximum amount of tries allowed
+    MaxTriesReached = 7,
     /// No explanation, only errors
     GeneralFailure = 253,
     /// Generic OS error that we can't do much with other than catching and forwarding
@@ -99,6 +101,7 @@ impl fmt::Display for Error {
             Self::MMF_NotFound => Cow::from("E002: No memory mapped file has been opened yet!"),
             Self::Uninitialized => Cow::from("Memory Mapped File was not yet initialized"),
             Self::MaxReaders => Cow::from("The maximum amount of readers is already registered"),
+            Self::MaxTriesReached => Cow::from("The maximum amount of tries was reached spinning"),
             Self::GeneralFailure => Cow::from("No idea what the hell happened here..."),
             Self::OS_Err(c) => Cow::from(format!("E{c:02}: Generic OS Error")),
         };
