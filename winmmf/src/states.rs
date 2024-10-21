@@ -170,11 +170,9 @@ impl MMFLock for RWLock<'_> {
     ///
     /// lock.lock_write().unwrap();
     ///
-    /// assert!(other_lock.writelocked());
-    /// assert!(!other_lock.readlocked());
-    /// assert!(other_lock.lock_read().is_err());
+    /// assert_eq!(other_lock.lock_read(), Err(err::Error::WriteLocked));
     ///
-    /// assert!(other_lock.unlock_write().is_err());
+    /// assert!(other_lock.unlock_read().is_err());
     /// assert!(lock.unlock_write().is_ok());
     /// # }
     /// ```
