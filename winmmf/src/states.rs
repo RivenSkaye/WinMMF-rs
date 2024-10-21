@@ -9,12 +9,19 @@
 //! The [`MMFLock`] trait is all you'll really care about. It tells you the things the main
 //! [`MemoryMappedFile`][crate::mmf::MemoryMappedFile] wants to call so it can safely do its thing. The [`RWLock`]
 //! struct provides a way to implement that stuff, as well as some sprinkled on additions of its own relevant to how
-//! this lock was designed. Things to note are that any one instance of an [`RWLock`] (and by extension any instance of
-//! an MMF) can only ever track a maximum of 127 readers and a single writer. And those are mutually exclusive.
-//! This means, that if you want to use MMFs in a place where several things are touching the memory at the same time,
-//! you'll deal with errors. Luckily these are usually just abstractions that tell you all is well, unless things go
-//! very wrong. And in that case, good luck. [`RWLock::spin`] will be your friend, as you'd only need to handle the case
-//! where you spin more than what your native pointer size holds and you should be seeing problems long before then.
+//! this lock was designed. Things to note are that any one instance of an [`RWLock`] does not do internal bookkeeping
+//! to see if holds any locks itself. This means you should _never_ call the `unlock_*` functions for locks you didn't
+//! request yourself. The functions are public only because they need to be implemented and called from the MMF wrapper.
+//! The lock _does_ ensure it never claims a lock when it can't, e.g. no readlocks will be taken while a writelock is
+//! held. This means that if you want to use MMFs in a place where several things are touching the memory at the same
+//! time, you'll deal with errors. Luckily these are usually just abstractions that tell you all is well, unless things
+//! go very wrong. And in that case, good luck.
+//!
+//! The errors in this crate still need some work. They're in active development.
+//!
+//! Assuming you're comfortable waiting on the locks to be claimable, [`MMFLock::spin_and_lock_read`] and
+//! [`MMFLock::spin_and_lock_write`] will be your friends, as you'd only need to handle the case where you spin more
+//! than what your native pointer size holds, and you should be seeing problems long before then.
 //!
 //! No guarantees are made about the usefulness and safety of this code, and the project maintainer is not liable for
 //! any damages, be they to your PC or your (mental) health.
@@ -86,16 +93,6 @@ pub trait MMFLock {
 ///   remotely close to the actual limit. It also means that if for some reason there _are_ (2^24) - 1 locks, we get to
 ///   call upon "implementation defined results" which are implemented here as
 ///   [`Error::MaxReaders`][crate::err::Error::MaxReaders]. Enjoy!
-///
-/// To prevent a series of potentially problematic results, every unique instance of this lock should track what it
-/// holds internally as well. This also allows for every unique lock instance to limit the amount of locks held to
-/// ONE write lock and 127 read locks. Any one application shouldn't need more than that, and it allows us to do things
-/// like only clearing lock counters if we actually hold a lock to release. If your custom use-case has a need for more
-/// than 127 readers in one application, you're free to reuse the code here in a way that allows more readers than the
-/// OS. Just change the `current_lock` and `HOLDING_` constants to their 32-bit counterparts, then shift `HOLDING_W` 24
-/// bits to the left. The reason the default implementation doesn't do this, is that it was written to ensure it's safe
-/// to use. Weird OS quirks when going over the default limits don't fit that bill, so limiting the amount of open
-/// handles allows for guaranteeing safety assuming a sane system configuration.
 #[cfg(feature = "impl_lock")]
 #[derive(Debug)]
 pub struct RWLock<'a> {
@@ -207,9 +204,6 @@ impl MMFLock for RWLock<'_> {
 
     /// Thin wrapper around [`Self::set_init`] that returns self for chaining calls.
     ///
-    /// # Safety
-    /// The same safety concerns apply as for `set_init`.
-    ///
     /// ## Usage
     /// ```
     /// # use std::sync::atomic::AtomicU32;
@@ -318,7 +312,7 @@ impl MMFLock for RWLock<'_> {
         Ok(())
     }
 
-    /// Release a write lock if we're the ones holding it
+    /// Release a write lock if one is being held
     fn unlock_write(&self) -> MMFResult<()> {
         loop {
             let chunk = self.chunk.load(Ordering::Acquire);
