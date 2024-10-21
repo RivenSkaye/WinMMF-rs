@@ -19,10 +19,7 @@
 //! No guarantees are made about the usefulness and safety of this code, and the project maintainer is not liable for
 //! any damages, be they to your PC or your (mental) health.
 
-use std::{
-    ops::AddAssign,
-    sync::atomic::{fence, AtomicU32, Ordering},
-};
+use std::sync::atomic::{fence, AtomicU32, Ordering};
 
 use super::err::{Error, MMFResult};
 
