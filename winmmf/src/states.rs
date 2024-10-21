@@ -286,7 +286,7 @@ impl MMFLock for RWLock<'_> {
             }
 
             if chunk == 0 {
-                // joel: use a better error code like "NoReaders" or something?
+                // joel: use a better error code like "NoReaders" or something? indicates bad lock usage
                 return Err(Error::GeneralFailure);
             }
 
@@ -338,7 +338,13 @@ impl MMFLock for RWLock<'_> {
                 return Err(Error::Uninitialized);
             }
 
+            if !Self::writelocked(chunk) {
+                // this should also probably be a different error code, indicates bad lock usage
+                return Err(Error::WriteLocked);
+            }
+
             if Self::readlocked(chunk) {
+                // this should also probably be a different error code, indicates bad lock usage
                 return Err(Error::ReadLocked);
             }
 
