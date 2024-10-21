@@ -212,9 +212,7 @@ impl MMFLock for RWLock<'_> {
     /// In pre-0.3 versions of this crate, this would clear existing locks. This is a bad idea though, as a naive caller
     /// might not realize they're not the only process using the MMF.
     fn set_init(&self) {
-        fence(Ordering::AcqRel);
         _ = self.chunk.compare_exchange(Self::INITIALIZE_MASK, 0, Ordering::Release, Ordering::Relaxed);
-        fence(Ordering::AcqRel);
     }
 
     /// Thin wrapper around [`Self::set_init`] that returns self for chaining calls.
@@ -263,6 +261,7 @@ impl MMFLock for RWLock<'_> {
             }
         }
 
+        fence(Ordering::SeqCst);
         Ok(())
     }
 
