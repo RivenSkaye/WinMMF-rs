@@ -21,7 +21,7 @@ pub enum Error {
     /// Uninitialized, who's to say what's in there?
     /// Although MMFs created in this crate will just be nulls.
     Uninitialized = 2,
-    /// 127+ concurrent readers, wtf
+    /// 7500 concurrent readers, wtf
     MaxReaders = 3,
     /// It's too big ~~onii-chan~~
     NotEnoughMemory = 4,
@@ -29,6 +29,7 @@ pub enum Error {
     MMF_NotFound = 5,
     /// Something else was racing you, this is scary.
     LockViolation = 6,
+    MaxTriesReached = 7,
     /// No explanation, only errors
     GeneralFailure = 253,
     /// Generic OS error that we can't do much with other than catching and forwarding

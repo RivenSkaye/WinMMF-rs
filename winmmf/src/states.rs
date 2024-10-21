@@ -19,10 +19,9 @@
 //! No guarantees are made about the usefulness and safety of this code, and the project maintainer is not liable for
 //! any damages, be they to your PC or your (mental) health.
 
-use core::fmt;
 use std::{
     ops::AddAssign,
-    sync::atomic::{fence, AtomicU32, AtomicU8, Ordering},
+    sync::atomic::{fence, AtomicU32, Ordering},
 };
 
 use super::err::{Error, MMFResult};
@@ -36,16 +35,6 @@ use super::err::{Error, MMFResult};
 ///
 /// Users are free to use the default lock and MMF implementations independently of one another.
 pub trait MMFLock {
-    /// Check if the data this lock is has been initialized for use
-    fn initialized(&self) -> bool;
-    /// Checks if this lock is readlocked. Does not indicate writelock status; use
-    /// [the other lock probe][`MMFLock::writelocked`] for that.
-    fn readlocked(&self) -> bool;
-    /// Checks if this lock is writelocked. Does not indicate readlock status; use
-    /// [the other lock probe][`MMFLock::readlocked`] for that.
-    fn writelocked(&self) -> bool;
-    /// Checks if there are any acitve locks, including the initialization locks.
-    fn locked(&self) -> bool;
     /// Acquire a readlock, if at all possible. Otherwise error.
     fn lock_read(&self) -> MMFResult<()>;
     /// Release a readlock, clearing the readlock state if this was the last lock.
@@ -54,8 +43,8 @@ pub trait MMFLock {
     fn lock_write(&self) -> MMFResult<()>;
     /// Nuke all existing write locks as there can only be one, legally.
     fn unlock_write(&self) -> MMFResult<()>;
-    /// Spin and return true while the lock is held
-    fn spin(&self, tries: &mut usize) -> MMFResult<bool>;
+    /// Check if the lock is initialized
+    fn initialized(&self) -> bool;
     /// Spin until the lock can be taken, then take it.
     fn spin_and_lock_read(lock: &Self, max_tries: usize) -> MMFResult<()>
     where
@@ -84,21 +73,6 @@ pub trait MMFLock {
     fn initialize(self) -> Self
     where
         Self: Sized;
-}
-
-impl fmt::Debug for dyn MMFLock {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Lock {{ {} }}",
-            match (self.writelocked(), self.readlocked()) {
-                (true, false) => "Write",
-                (false, true) => "Read",
-                (false, false) => "None",
-                (true, true) => "Poisoned",
-            }
-        )
-    }
 }
 
 /// Packed binary data to represent the locking state of the MMF.
@@ -131,8 +105,6 @@ pub struct RWLock<'a> {
     /// An Atomic reference to the first 4 bytes in the MemoryMappedView.
     /// Alignment is not an issue considering Windows aligns views to pointers by default.
     chunk: &'a AtomicU32,
-    /// Current internal lock state, used to prevent us from releasing locks we don't hold.
-    current_lock: AtomicU8,
 }
 
 #[cfg(feature = "impl_lock")]
@@ -144,12 +116,28 @@ impl RWLock<'_> {
     /// Mask to check if it's locked for READING
     pub const READ_LOCK_MASK: u32 = !Self::INITIALIZE_MASK;
 
-    /// Bitmask to check if we're holding the write lock ourselves. One bit to rule them all.
-    pub const HOLDING_W: u8 = 0b10000000;
-    /// Bitmask for readlocks.
+    /// Check if this lock has been initialized at all.
     ///
-    /// Any of these mean we hold a lock, all of these means we **can't hold any more read locks**.
-    pub const HOLDING_R: u8 = !Self::HOLDING_W;
+    /// Regardless of locking state, and abuse of the 7 empty bits, a lock _should_ not have all bits on the first byte
+    /// set to one. If it does, either the lock isn't initialized, or the user is not being very smart.
+    fn initialized(chunk: u32) -> bool {
+        (chunk & Self::INITIALIZE_MASK) < Self::INITIALIZE_MASK
+    }
+
+    /// Check if the lock is held for reading. This should only prevent new write locks.
+    fn readlocked(chunk: u32) -> bool {
+        (chunk & Self::READ_LOCK_MASK) > 0
+    }
+
+    /// Check if the lock is held for writing. This should prevent ALL other locking operations.
+    fn writelocked(chunk: u32) -> bool {
+        (chunk & Self::WRITE_LOCK_MASK) == Self::WRITE_LOCK_MASK
+    }
+
+    /// Check if the locks are any non-zero value. Uninitialized locks are considered held.
+    fn locked(chunk: u32) -> bool {
+        chunk > 0
+    }
 }
 
 #[cfg(feature = "impl_lock")]
@@ -202,7 +190,7 @@ impl MMFLock for RWLock<'_> {
         if pointer.is_null() {
             panic!("Never, ever pass a null pointer into a lock!")
         }
-        Self { chunk: AtomicU32::from_ptr(pointer.cast()), current_lock: AtomicU8::new(0) }
+        Self { chunk: AtomicU32::from_ptr(pointer.cast()) }
     }
 
     /// Similar to [`Self::from_existing`], except it clears all state and ensures [`Self::initialized`] returns false.
@@ -214,7 +202,7 @@ impl MMFLock for RWLock<'_> {
         if pointer.is_null() {
             panic!("Never, ever pass a null pointer into a lock!")
         }
-        let lock = Self { chunk: AtomicU32::from_ptr(pointer.cast()), current_lock: AtomicU8::new(255) };
+        let lock = Self { chunk: AtomicU32::from_ptr(pointer.cast()) };
         lock.chunk.store(Self::INITIALIZE_MASK, Ordering::Release);
         lock
     }
@@ -226,7 +214,6 @@ impl MMFLock for RWLock<'_> {
     fn set_init(&self) {
         fence(Ordering::AcqRel);
         _ = self.chunk.compare_exchange(Self::INITIALIZE_MASK, 0, Ordering::Release, Ordering::Relaxed);
-        _ = self.current_lock.compare_exchange(255, 0, Ordering::Release, Ordering::Relaxed);
         fence(Ordering::AcqRel);
     }
 
@@ -249,177 +236,158 @@ impl MMFLock for RWLock<'_> {
         self
     }
 
-    /// Check if this lock has been initialized at all.
-    ///
-    /// Regardless of locking state, and abuse of the 7 empty bits, a lock _should_ not have all bits on the first byte
-    /// set to one. If it does, either the lock isn't initialized, or the user is not being very smart.
-    #[inline(always)]
+    /// Check if the lock is initialized
     fn initialized(&self) -> bool {
-        fence(Ordering::AcqRel);
-        (self.chunk.load(Ordering::Acquire) & Self::INITIALIZE_MASK) < Self::INITIALIZE_MASK
-            || self.current_lock.load(Ordering::Acquire) < 255
-    }
-
-    /// Check if the lock is held for reading. This should only prevent new write locks.
-    #[inline(always)]
-    fn readlocked(&self) -> bool {
-        fence(Ordering::AcqRel);
-        (self.chunk.load(Ordering::Acquire) & Self::READ_LOCK_MASK) > 0
-            || (self.current_lock.load(Ordering::Acquire) & Self::HOLDING_R) > 0
-    }
-
-    /// Check if the lock is held for writing. This should prevent ALL other locking operations.
-    #[inline(always)]
-    fn writelocked(&self) -> bool {
-        fence(Ordering::AcqRel);
-        (self.chunk.load(Ordering::Acquire) & Self::WRITE_LOCK_MASK) == Self::WRITE_LOCK_MASK
-            || (self.current_lock.load(Ordering::Acquire) & Self::HOLDING_W) == Self::HOLDING_W
-    }
-
-    /// Check if the locks are any non-zero value. Uninitialized locks are considered held.
-    #[inline(always)]
-    fn locked(&self) -> bool {
-        fence(Ordering::AcqRel);
-        self.chunk.load(Ordering::Acquire) > 0 || self.current_lock.load(Ordering::Acquire) > 0
+        Self::initialized(self.chunk.load(Ordering::Acquire))
     }
 
     /// Increment the counter for read locks ***if and only if*** we can safely lock this for reading
     fn lock_read(&self) -> MMFResult<()> {
-        if !self.initialized() {
-            Err(Error::Uninitialized)
-        } else if self.writelocked() {
-            Err(Error::WriteLocked)
-        } else {
-            fence(Ordering::AcqRel);
-            let ret = self
-                .chunk
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |lock| {
-                    if (lock & Self::READ_LOCK_MASK) == Self::READ_LOCK_MASK
-                        || self.current_lock.load(Ordering::Acquire) == Self::HOLDING_R
-                    {
-                        None
-                    } else {
-                        self.current_lock.fetch_add(1, Ordering::AcqRel);
-                        Some(lock + 1)
-                    }
-                })
-                .map(|_| ())
-                .map_err(|_| Error::MaxReaders);
-            fence(Ordering::AcqRel);
-            ret
+        loop {
+            let chunk = self.chunk.load(Ordering::Acquire);
+
+            if !Self::initialized(chunk) {
+                return Err(Error::Uninitialized);
+            }
+
+            if Self::writelocked(chunk) {
+                return Err(Error::WriteLocked);
+            }
+
+            if (chunk & Self::READ_LOCK_MASK) == Self::READ_LOCK_MASK {
+                return Err(Error::MaxReaders);
+            }
+
+            if self.chunk.compare_exchange_weak(chunk, chunk + 1, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                break;
+            }
         }
+
+        Ok(())
     }
 
     /// Decrease the read lock counter if we can safely do so.
     fn unlock_read(&self) -> MMFResult<()> {
-        if !self.initialized() {
-            Err(Error::Uninitialized)
-        } else if self.writelocked() {
-            Err(Error::WriteLocked)
-        } else {
-            fence(Ordering::AcqRel);
-            let ret = self
-                .chunk
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |lock| {
-                    if (lock & Self::READ_LOCK_MASK) == 0 || self.current_lock.load(Ordering::Acquire) == 0 {
-                        None
-                    } else {
-                        self.current_lock.fetch_sub(1, Ordering::AcqRel);
-                        Some(lock - 1)
-                    }
-                })
-                .map(|_| ())
-                .map_err(|_| Error::MaxReaders);
-            fence(Ordering::AcqRel);
-            ret
+        loop {
+            let chunk = self.chunk.load(Ordering::Acquire);
+
+            if !Self::initialized(chunk) {
+                return Err(Error::Uninitialized);
+            }
+
+            if Self::writelocked(chunk) {
+                // this error code is used in lock_read to indicate you cannot lock it because there is a write lock
+                // however this bit uses it to signal that it's write locked and your lock usage is broken.
+                // should this be two seperate error codes? ditto for other usages of this error code.
+                //
+                // states should probably also use a lock type that is seperate from the high level API since that error
+                // isn't possible there
+                return Err(Error::WriteLocked);
+            }
+
+            if chunk == 0 {
+                // joel: use a better error code like "NoReaders" or something?
+                return Err(Error::GeneralFailure);
+            }
+
+            if self.chunk.compare_exchange_weak(chunk, chunk - 1, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+                break;
+            }
         }
+
+        fence(Ordering::SeqCst);
+        Ok(())
     }
 
     /// Set the write lock bit to 1 if possible.
     fn lock_write(&self) -> MMFResult<()> {
-        if !self.initialized() {
-            Err(Error::Uninitialized)
-        } else if self.writelocked() {
-            Err(Error::WriteLocked)
-        } else if self.readlocked() {
-            Err(Error::ReadLocked)
-        } else {
-            fence(Ordering::AcqRel);
-            self.chunk
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |lock| {
-                    self.current_lock.fetch_or(Self::HOLDING_W, Ordering::AcqRel);
-                    Some(lock | Self::WRITE_LOCK_MASK)
-                })
-                .map(|_| ())
-                .map_err(|_| Error::GeneralFailure)
+        loop {
+            let chunk = self.chunk.load(Ordering::Acquire);
+
+            if !Self::initialized(chunk) {
+                return Err(Error::Uninitialized);
+            }
+
+            if Self::writelocked(chunk) {
+                return Err(Error::WriteLocked);
+            }
+
+            if Self::readlocked(chunk) {
+                return Err(Error::ReadLocked);
+            }
+
+            if self
+                .chunk
+                .compare_exchange_weak(chunk, chunk | Self::WRITE_LOCK_MASK, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                break;
+            }
         }
+
+        fence(Ordering::SeqCst);
+        Ok(())
     }
 
     /// Release a write lock if we're the ones holding it
     fn unlock_write(&self) -> MMFResult<()> {
-        if !self.writelocked() {
-            return Ok(());
-        }
-        if !self.initialized() {
-            Err(Error::Uninitialized)
-        } else {
-            fence(Ordering::AcqRel);
-            self.chunk
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |lock| {
-                    if (self.current_lock.load(Ordering::Acquire) & Self::HOLDING_W) == 0 {
-                        None
-                    } else {
-                        self.current_lock.fetch_xor(Self::HOLDING_W, Ordering::AcqRel);
-                        Some(lock ^ Self::WRITE_LOCK_MASK)
-                    }
-                })
-                .map(|_| ())
-                .map_err(|_| Error::GeneralFailure)
-        }
-    }
+        loop {
+            let chunk = self.chunk.load(Ordering::Acquire);
 
-    /// Very naive spinning implementation. Runs a finite amount of times.
-    ///
-    /// This spinning implementation just checks if the lock is held for as many times as it needs to. If it encounters
-    /// the upper bound of the native pointer size before the lock is released, it returns an error.
-    /// If uni taught me one thing, it would be that `while true` on locks will eventually lead to the big funny.
-    fn spin(&self, tries: &mut usize) -> MMFResult<bool> {
-        tries.add_assign(1);
-        let held = self.locked();
-        if usize::MAX.eq(tries) && held {
-            Err(Error::LockViolation)
-        } else {
-            Ok(held)
-        }
-    }
+            if !Self::initialized(chunk) {
+                return Err(Error::Uninitialized);
+            }
 
-    /// Very crude implementation of spinning with no backoff
-    fn spin_and_lock_read(lock: &Self, max_tries: usize) -> MMFResult<()> {
-        let mut tries = 0;
-        if !lock.initialized() {
-            return Err(Error::Uninitialized);
-        }
-        while lock.lock_read().is_err() {
-            tries += 1;
-            if tries >= max_tries {
-                return Err(Error::WriteLocked);
+            if Self::readlocked(chunk) {
+                return Err(Error::ReadLocked);
+            }
+
+            if self
+                .chunk
+                .compare_exchange_weak(chunk, chunk ^ Self::WRITE_LOCK_MASK, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                break;
             }
         }
+
+        fence(Ordering::SeqCst);
         Ok(())
     }
 
-    /// Very crude implementation of spinning with no backoff
-    fn spin_and_lock_write(lock: &Self, max_tries: usize) -> MMFResult<()> {
+    /// Very crude implementation of spinning with no backoff.
+    fn spin_and_lock_read(lock: &Self, max_tries: usize) -> MMFResult<()> {
         let mut tries = 0;
-        if !lock.initialized() {
-            return Err(Error::Uninitialized);
-        }
-        while lock.lock_write().is_err() {
+
+        while match lock.lock_read() {
+            Ok(_) => false,
+            Err(Error::WriteLocked) => true,
+            Err(err) => return Err(err),
+        } {
             tries += 1;
             if tries >= max_tries {
-                return Err(Error::LockViolation);
+                return Err(Error::MaxReaders);
             }
         }
+
+        Ok(())
+    }
+
+    /// Very crude implementation of spinning with no backoff.
+    fn spin_and_lock_write(lock: &Self, max_tries: usize) -> MMFResult<()> {
+        let mut tries = 0;
+
+        while match lock.lock_read() {
+            Ok(_) => false,
+            Err(Error::WriteLocked | Error::ReadLocked) => true,
+            Err(err) => return Err(err),
+        } {
+            tries += 1;
+            if tries >= max_tries {
+                return Err(Error::MaxTriesReached);
+            }
+        }
+
         Ok(())
     }
 }
