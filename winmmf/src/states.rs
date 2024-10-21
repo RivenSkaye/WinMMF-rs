@@ -372,7 +372,7 @@ impl MMFLock for RWLock<'_> {
         } {
             tries += 1;
             if tries >= max_tries {
-                return Err(Error::MaxReaders);
+                return Err(Error::MaxTriesReached);
             }
         }
 
