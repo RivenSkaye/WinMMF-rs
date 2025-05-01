@@ -9,7 +9,7 @@
     name                 = "winmmf-ffi"
     readme               = "README.md"
     repository.workspace = true
-    rust-version         = "1.75"
+    rust-version         = "1.82"
     version.workspace    = true
 
 [dependencies]
@@ -19,11 +19,11 @@
 [build-dependencies]
     csbindgen = "1.9"
 
-[package.metadata.docs.rs]
-    default-target = "x86_64-pc-windows-msvc"
-    rustc-args     = ["--cfg", "docsrs"]
-    rustdoc-args   = ["--cfg", "docsrs"]
-    targets        = ["i686-pc-windows-msvc", "x86_64-pc-windows-msvc"]
+    [package.metadata.docs.rs]
+        default-target = "x86_64-pc-windows-msvc"
+        rustc-args     = ["--cfg", "docsrs"]
+        rustdoc-args   = ["--cfg", "docsrs"]
+        targets        = ["i686-pc-windows-msvc", "x86_64-pc-windows-msvc"]
 
 [lib]
     # Sorry folks, no rlibs here. If you want Named Shared Memory in your

@@ -9,13 +9,13 @@
     name                 = "winmmf"
     readme               = "README.md"
     repository.workspace = true
-    rust-version         = "1.75"
+    rust-version         = "1.82"
     version.workspace    = true
 
 [dependencies]
     fixedstr = {version = "0.5.8", features = ["std"]}
     microseh = "1.1"
-    windows = {version = "0.58", features = [
+    windows = {version = "0.61", features = [
         "Win32_Foundation",
         "Win32_Security",
         "Win32_Storage",
@@ -31,11 +31,11 @@
     mmf_send   = []
     namespaces = []
 
-[package.metadata.docs.rs]
-    default-target = "x86_64-pc-windows-msvc"
-    rustc-args     = ["--cfg", "docsrs"]
-    rustdoc-args   = ["--cfg", "docsrs"]
-    targets        = ["i686-pc-windows-msvc", "x86_64-pc-windows-msvc"]
+    [package.metadata.docs.rs]
+        default-target = "x86_64-pc-windows-msvc"
+        rustc-args     = ["--cfg", "docsrs"]
+        rustdoc-args   = ["--cfg", "docsrs"]
+        targets        = ["i686-pc-windows-msvc", "x86_64-pc-windows-msvc"]
 
 [lib]
     # sorry folks, but this lib is only meant to be used from other Rust crates.

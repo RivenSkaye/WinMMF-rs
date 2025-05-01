@@ -39,7 +39,7 @@ fn _init<'a>(cap: usize) -> MMFWrapper<'a> {
 ///
 /// Returns: 0 on success, -1 on error.
 /// The only conceivable error state would be calling this function more than once.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn init(count: Option<NonZeroUsize>) -> isize {
     let cap = count.map(|c| c.get()).unwrap_or(1);
     MMFS.set(_init(cap)).map(|_| 0).unwrap_or(-1)
@@ -55,7 +55,7 @@ pub extern "system" fn init(count: Option<NonZeroUsize>) -> isize {
 /// - -3: The namespace is invalid
 /// - -4: The MMF could not be opened
 /// - -5: The MMF could not be stored
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn open(size: Option<NonZeroUsize>, name: FfiStr, namespace: u8) -> isize {
     match (size, name.as_opt_str(), namespace.try_into()) {
         (None, _, _) => -1,
@@ -68,7 +68,7 @@ pub extern "system" fn open(size: Option<NonZeroUsize>, name: FfiStr, namespace:
                     .map(|mut inner| {
                         inner.push(mapped);
                         let idx = inner.len() - 1;
-                        _ = CURRENT.compare_exchange(0, idx, Ordering::Acquire, Ordering::Relaxed);
+                        CURRENT.store(idx + 1, Ordering::Relaxed);
                         idx as isize
                     })
                     .unwrap_or(-5)
@@ -89,7 +89,7 @@ pub extern "system" fn open(size: Option<NonZeroUsize>, name: FfiStr, namespace:
 /// - -3: The namespace is invalid
 /// - -4: The MMF could not be opened
 /// - -5: The MMF could not be stored
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn new(size: Option<NonZeroUsize>, name: FfiStr, namespace: u8) -> isize {
     match (size, name.as_opt_str(), namespace.try_into()) {
         (None, _, _) => -1,
@@ -102,7 +102,7 @@ pub extern "system" fn new(size: Option<NonZeroUsize>, name: FfiStr, namespace: 
                     .map(|mut inner| {
                         inner.push(mapped);
                         let idx = inner.len() - 1;
-                        _ = CURRENT.compare_exchange(0, idx, Ordering::Acquire, Ordering::Relaxed);
+                        CURRENT.store(idx + 1, Ordering::Relaxed);
                         idx as isize
                     })
                     .unwrap_or(-5)
@@ -127,7 +127,7 @@ pub extern "system" fn new(size: Option<NonZeroUsize>, name: FfiStr, namespace: 
 /// - -2: MMF is closed
 /// - -3: MMF isn't initialized
 /// - -4: ???
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn read_buf(mmf_idx: Option<NonZeroUsize>, count: usize, buff: *mut u8) -> isize {
     if buff.is_null() {
         return -4;
@@ -141,7 +141,7 @@ pub unsafe extern "system" fn read_buf(mmf_idx: Option<NonZeroUsize>, count: usi
                 .lock()
                 .map(|inner| {
                     inner
-                        .get(mmf_idx.map(|nsu| nsu.get()).unwrap_or_else(|| CURRENT.load(Ordering::Acquire)))
+                        .get(mmf_idx.map(|nsu| nsu.get()).unwrap_or_else(|| CURRENT.load(Ordering::Acquire) - 1))
                         .map(|mmf| {
                             mmf.read_to_raw(buff, count).map(|_| 0).unwrap_or_else(|e| match e {
                                 Error::MMF_NotFound => -2,
@@ -165,7 +165,7 @@ pub unsafe extern "system" fn read_buf(mmf_idx: Option<NonZeroUsize>, count: usi
 ///
 /// If something went wrong, the data behind the pointer will be an error code, right padded with `0xFF` until the end
 /// of the requested buffer. If no size is provided, the returned pointer will be the length of the current active MMF.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn read(mmf_idx: Option<NonZeroUsize>, count: usize) -> *mut u8 {
     MMFS.get()
         .map(|inner| {
@@ -173,7 +173,7 @@ pub extern "system" fn read(mmf_idx: Option<NonZeroUsize>, count: usize) -> *mut
                 .lock()
                 .map(|inner| {
                     inner
-                        .get(mmf_idx.map(|nsu| nsu.get()).unwrap_or_else(|| CURRENT.load(Ordering::Acquire)))
+                        .get(mmf_idx.map(|nsu| nsu.get()).unwrap_or_else(|| CURRENT.load(Ordering::Acquire) - 1))
                         .map(|mmf| {
                             if count == 0 {
                                 let mut ret = vec![0; mmf.size()];
@@ -221,7 +221,7 @@ pub extern "system" fn read(mmf_idx: Option<NonZeroUsize>, count: usize) -> *mut
 /// # Safety
 /// Do not pass pointers not received from this library. Doing so is UB by definition.
 /// Null pointers will be silently ignored.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn free_result(mmf_idx: Option<NonZeroUsize>, res: *mut u8) {
     if res.is_null() {
         return;
@@ -232,7 +232,7 @@ pub unsafe extern "system" fn free_result(mmf_idx: Option<NonZeroUsize>, res: *m
                 .lock()
                 .map(|inner| {
                     inner
-                        .get(mmf_idx.map(|nsu| nsu.get()).unwrap_or_else(|| CURRENT.load(Ordering::Acquire)))
+                        .get(mmf_idx.map(|nsu| nsu.get()).unwrap_or_else(|| CURRENT.load(Ordering::Acquire) - 1))
                         .map(|mmf| unsafe { free_raw(res, mmf.size()) })
                         .unwrap_or(())
                 })
@@ -247,7 +247,7 @@ pub unsafe extern "system" fn free_result(mmf_idx: Option<NonZeroUsize>, res: *m
 ///
 /// If the provided size is incorrect, you might be leaking bytes (too small, mostly harmless) or you might be invoking
 /// UB (too large, harmful to the universe). If you're just gambling the size, I hope you anger the Duolingo bird.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn free_raw(res: *mut u8, size: usize) {
     drop(Vec::from_raw_parts(res, size, size))
 }
@@ -264,7 +264,7 @@ pub unsafe extern "system" fn free_raw(res: *mut u8, size: usize) {
 /// - -3: Uninitialized
 /// - -4: Read- or WriteLocked
 /// - -5: Programmer issue
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn write(mmf_idx: Option<NonZeroUsize>, data: *mut u8, size: usize) -> isize {
     if data.is_null() {
         -5
@@ -275,7 +275,7 @@ pub unsafe extern "system" fn write(mmf_idx: Option<NonZeroUsize>, data: *mut u8
                     .lock()
                     .map(|inner| {
                         inner
-                            .get(mmf_idx.map(|nsu| nsu.get()).unwrap_or_else(|| CURRENT.load(Ordering::Acquire)))
+                            .get(mmf_idx.map(|nsu| nsu.get()).unwrap_or_else(|| CURRENT.load(Ordering::Acquire) - 1))
                             .map(|mmf| {
                                 let buff = unsafe { std::slice::from_raw_parts_mut(data, size) };
                                 match mmf.write(buff) {
@@ -297,39 +297,28 @@ pub unsafe extern "system" fn write(mmf_idx: Option<NonZeroUsize>, data: *mut u8
     }
 }
 
-/// Convenience function to open a read-only MMF and get a usable pointer for future read calls.
+/// Convenience function to open a read-only MMF and get an index back to read from it.
 ///
-/// - If you pass in a size of 0, you get a null pointer.
-/// - If you don't provide a usable name, you get a null pointer.
-/// - If you pass an invalid namespace, you get a null pointer.
-/// - If the returned pointer is not null, it's valid until you close the MMF. All bytes behind it will be its index,
-///   unless you have more than 255 MMFs open. Please don't open that many...
-///
-/// This pointer still has to be [`free`d][free_result]
-#[no_mangle]
-pub extern "system" fn open_ro(size: Option<NonZeroUsize>, name: FfiStr, namespace: u8) -> *mut u8 {
+/// Results returned from this function are the same as [`open`]
+#[unsafe(no_mangle)]
+pub extern "system" fn open_ro(size: Option<NonZeroUsize>, name: FfiStr, namespace: u8) -> isize {
     match (size, name.as_opt_str(), namespace.try_into()) {
-        (None, _, _) => null_mut(),
-        (_, None, _) => null_mut(),
-        (_, _, Err(_)) => null_mut(),
+        (None, _, _) => -1,
+        (_, None, _) => -2,
+        (_, _, Err(_)) => -3,
         (Some(size), Some(namestr), Ok(ns)) => {
             if let Ok(mapped) = MemoryMappedFile::open(size, namestr, ns, true) {
                 MMFS.get_or_init(|| _init(1))
                     .lock()
                     .map(|mut inner| {
                         inner.push(mapped);
-                        let count = inner.len() - 1;
-                        _ = CURRENT.compare_exchange(0, count, Ordering::Acquire, Ordering::Relaxed);
-                        vec![count.min(0xFF) as u8; count] // clamp and truncate
+                        let idx = inner.len() - 1;
+                        CURRENT.store(idx + 1, Ordering::Relaxed);
+                        idx as isize
                     })
-                    .map(|mut ret| {
-                        let ptr = ret.as_mut_ptr();
-                        std::mem::forget(ret);
-                        ptr
-                    })
-                    .unwrap_or(null_mut())
+                    .unwrap_or(-5)
             } else {
-                null_mut()
+                -4
             }
         }
     }
@@ -338,9 +327,35 @@ pub extern "system" fn open_ro(size: Option<NonZeroUsize>, name: FfiStr, namespa
 /// Close the MMF
 ///
 /// Closes the specific instance stored here without interferring with other processes that might be using it.
-#[no_mangle]
-pub extern "system" fn close(mmf_idx: usize) {
+#[unsafe(no_mangle)]
+pub extern "system" fn close(mmf_idx: Option<NonZeroUsize>) {
     MMFS.get()
-        .map(|inner| inner.lock().map(|mut inner| drop(inner.remove(mmf_idx))).unwrap_or_default())
+        .map(|inner| {
+            inner
+                .lock()
+                .map(|mut inner| {
+                    drop(
+                        inner.remove(
+                            mmf_idx.map(|nsu| nsu.get()).unwrap_or_else(|| CURRENT.load(Ordering::Acquire) - 1),
+                        ),
+                    )
+                })
+                .unwrap_or_default()
+        })
         .unwrap_or_default()
+}
+
+/// Selects a different default mmf for all operations.
+///
+/// The only thing that can really go wrong here is the user being dumb,
+/// so the input is clamped or wrapped and the newly selected index is returned.
+#[unsafe(no_mangle)]
+pub extern "system" fn select_default(mmf_idx: Option<NonZeroUsize>) -> isize {
+    if let Some(max_idx) = MMFS.get().map(|inner| inner.lock().unwrap().len()) {
+        let idx = mmf_idx.map(|nsu| nsu.get()).unwrap_or(CURRENT.load(Ordering::Acquire));
+        let select = if idx == 0 || idx > max_idx { max_idx } else { idx };
+        CURRENT.store(select, Ordering::Release);
+        return select as isize;
+    }
+    -1
 }
