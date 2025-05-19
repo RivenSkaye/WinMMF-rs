@@ -1,18 +1,10 @@
 #![deny(clippy::missing_docs_in_private_items)]
 #![deny(missing_docs)]
-//! # Memory-Mapped Files, Rust-style
+//! # Memory-mapped files
 //!
-//! This crate contains everything you need to work with Memory-Mapped files. Or you can just roll your own and build
-//! upon the [`Mmf`] trait defined here. This module exports some utilities and ease of use items and you're entirely
-//! free to use or not use them. By default, the implementations and namespaces are enabled. If you do not wish to do
-//! so, look at the implementation for [`MemoryMappedFile`] and check the `use` statements to see what you need to do to
-//! get things working.
-//!
-//! The internal implementation is built entirely around using [`fixedstr::zstr`] to keep references to strings alive
-//! because for some reason everything goes to hell if you don't. [`microseh`] is just as much a core component here, as
-//! it's a requirement to get the OS to play nice in the event of something going wrong and a structured exception being
-//! thrown. This **does** mean that you, the consumer of this library, must ensure a clean exit and teardown upon
-//! failure. No, a [`panic!`] does not suffice, ensure things get dropped and that the OS doesn't unwind your ass.
+//! This module contains all of the important parts to pop open pagefile-backed memory. For more in-depth information
+//! and some background, please refer to [the series of blog posts](https://skaye.blog/winmmf/overview) I wrote about
+//! my fun adventures with getting low-overhead IPC working.
 //!
 //! While it would be possible to split things out further, using this much to ensure everything works smoothly helps
 //! keeping this maintanable and usable. If you need a more minimal implementation, feel free to yank whatever you need

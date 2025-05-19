@@ -1,6 +1,5 @@
-use crate::states::RWLock;
+use crate::{mmf::*, states::RWLock};
 
-use crate::mmf::*;
 use std::num::NonZeroUsize;
 use windows::Win32::Foundation::{self as WFoundation, SetLastError};
 
