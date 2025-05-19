@@ -20,7 +20,7 @@ use std::{
     },
 };
 pub use winmmf::Namespace as ValidNamespaces;
-use winmmf::{states::RWLock, *};
+use winmmf::*;
 
 /// You didn't think I was going to keep _this_ long a type unaliased right?
 type MMFWrapper<'a> = Mutex<Vec<MemoryMappedFile<RWLock<'a>>>>;
