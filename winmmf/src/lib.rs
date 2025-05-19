@@ -4,6 +4,7 @@ pub mod states;
 
 pub use err::*;
 pub use mmf::*;
+pub use states::*;
 
 #[cfg(test)]
 mod unit_tests;
