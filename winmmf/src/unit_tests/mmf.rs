@@ -10,7 +10,7 @@ pub fn test_write() {
     let file1 = MemoryMappedFile::<RWLock>::new(NonZeroUsize::new(64).unwrap(), "test_write", Namespace::LOCAL)
         .expect("creation failed");
     unsafe { SetLastError(WFoundation::WIN32_ERROR(0)) };
-    file1.write(TESTSTRING).expect("Failed to write");
+    file1.write(TESTSTRING.as_slice()).expect("Failed to write");
     drop(file1);
 }
 
@@ -19,7 +19,7 @@ pub fn test_read_self() {
     let file1 = MemoryMappedFile::<RWLock>::new(NonZeroUsize::new(64).unwrap(), "test_read_self", Namespace::LOCAL)
         .expect("creation failed");
     unsafe { SetLastError(WFoundation::WIN32_ERROR(0)) };
-    file1.write(TESTSTRING).expect("Failed to write");
+    file1.write(TESTSTRING.as_slice()).expect("Failed to write");
     let readback = file1.read(56).expect("Failed to read on 1");
     drop(file1);
     assert_eq!(&readback, TESTSTRING);
@@ -30,7 +30,7 @@ pub fn test_read_other() {
     let file1 = MemoryMappedFile::<RWLock>::new(NonZeroUsize::new(64).unwrap(), "test_read_other", Namespace::LOCAL)
         .expect("creation failed");
     unsafe { SetLastError(WFoundation::WIN32_ERROR(0)) };
-    file1.write(TESTSTRING).expect("Failed to write");
+    file1.write(TESTSTRING.as_slice()).expect("Failed to write");
     let file2 =
         MemoryMappedFile::<RWLock>::open(NonZeroUsize::new(64).unwrap(), "test_read_other", Namespace::LOCAL, false)
             .expect("2nd open failed");
@@ -57,7 +57,7 @@ pub fn test_lock_reopen() {
     let file3 =
         MemoryMappedFile::<RWLock>::open(NonZeroUsize::new(64).unwrap(), "test_lock_reopen", Namespace::LOCAL, false)
             .expect("2nd open failed");
-    file3.write(TESTSTRING).expect("Failed to write");
+    file3.write(TESTSTRING.as_slice()).expect("Failed to write");
     let readback = file2.read(56).expect("Failed to read on 2");
 
     drop(file2);
@@ -92,7 +92,7 @@ pub fn test_no_exist_after_close() {
         MemoryMappedFile::<RWLock>::new(NonZeroUsize::new(64).unwrap(), "test_no_exist_after_close", Namespace::LOCAL)
             .expect("creation failed");
     unsafe { SetLastError(WFoundation::WIN32_ERROR(0)) };
-    file1.write(TESTSTRING).expect("Failed to write");
+    file1.write(TESTSTRING.as_slice()).expect("Failed to write");
     drop(file1);
 
     let file2 =
