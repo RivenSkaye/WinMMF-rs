@@ -26,7 +26,7 @@ use windows::{
 
 use std::cell::Cell;
 #[cfg(feature = "impl_mmf")]
-use std::{fmt, num::NonZeroUsize};
+use std::{fmt, num::NonZeroUsize, ops::Deref};
 #[cfg(feature = "impl_mmf")]
 use windows::{
     core::PCSTR,
@@ -105,7 +105,7 @@ pub trait Mmf {
     /// Allows for viewing the size without exposing the property.
     fn size(&self) -> usize;
     /// Write data to the MMF.
-    fn write(&self, buffer: &[u8]) -> MMFResult<()>;
+    fn write(&self, buffer: impl Deref<Target = [u8]>) -> MMFResult<()>;
     /// Spin for `tries` times max, or until reading is allowed.
     ///
     /// This method takes an optional spinning function that returns a result. The spinning function must acquire the
@@ -135,7 +135,7 @@ pub trait Mmf {
     /// This method takes an optional spinning function that returns a result. The spinning function must acquire the
     /// lock, and this function must unlock.
     /// Defaults to [the one in `RWLock`][crate::states::RWLock]
-    fn write_spin<F>(&self, buffer: &[u8], spinner: Option<F>) -> MMFResult<()>
+    fn write_spin<F>(&self, buffer: impl Deref<Target = [u8]>, spinner: Option<F>) -> MMFResult<()>
     where
         F: FnMut(&dyn MMFLock, usize) -> MMFResult<()>;
 }
@@ -489,7 +489,7 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
     /// - 0 or 1: Access denied; the lock could not be acquired or the MMF is read-only.
     /// - 4: Not enough memory; the write was blocked because it was too large.
     /// - All errors from [Self::read()] as a read is required to update the lock.
-    fn write(&self, buffer: &[u8]) -> MMFResult<()> {
+    fn write(&self, buffer: impl Deref<Target = [u8]>) -> MMFResult<()> {
         if self.readonly || self.closed.get() {
             return Err(MMFError::MMF_NotFound);
         }
@@ -510,7 +510,7 @@ impl<LOCK: MMFLock> Mmf for MemoryMappedFile<LOCK> {
         }
     }
 
-    fn write_spin<F>(&self, buffer: &[u8], spinner: Option<F>) -> MMFResult<()>
+    fn write_spin<F>(&self, buffer: impl Deref<Target = [u8]>, spinner: Option<F>) -> MMFResult<()>
     where
         F: FnMut(&dyn MMFLock, usize) -> MMFResult<()>,
     {
