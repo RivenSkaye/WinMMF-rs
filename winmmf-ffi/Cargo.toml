@@ -14,7 +14,7 @@
 
 [dependencies]
     ffi-support = {version = "0.4"}
-    winmmf      = {path = "../winmmf", version = "0.3"}
+    winmmf      = {path = "../winmmf", version = "0.4"}
 
 [build-dependencies]
     csbindgen = "1.9"
