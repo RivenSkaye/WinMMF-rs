@@ -14,8 +14,9 @@ The crates here live in pretty standard semver. The only thing that stands out i
 ## MSRV
 
 The MSRV is manually checked before releasing as of workspace version 0.2.1. This is done with the help of [`cargo-msrv`](https://gribnau.dev/cargo-msrv/index.html). I might integrate it in CI at some point, but there are currently no plans to do so.
+MSRV testing and updating the `Cargo.toml` is done more often than I remember to edit this readme. To make sure your version of Rust is supported, check that file.
 
-The current listed MSRV is: **1.75**.
+The listed MSRV at the time of writing: **1.82**.
 
 ## Supported platforms
 
