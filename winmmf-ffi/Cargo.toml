@@ -1,16 +1,16 @@
 [package]
-    authors.workspace    = true
-    categories.workspace = true
-    description          = "A wrapper for WinMMF to make it usable as a cdylib."
-    edition.workspace    = true
-    homepage.workspace   = true
-    keywords.workspace   = true
-    license.workspace    = true
-    name                 = "winmmf-ffi"
-    readme               = "README.md"
-    repository.workspace = true
-    rust-version         = "1.82"
-    version.workspace    = true
+    authors.workspace      = true
+    categories.workspace   = true
+    description            = "A wrapper for WinMMF to make it usable as a cdylib."
+    edition.workspace      = true
+    homepage.workspace     = true
+    keywords.workspace     = true
+    license.workspace      = true
+    name                   = "winmmf-ffi"
+    readme                 = "README.md"
+    repository.workspace   = true
+    rust-version.workspace = true
+    version.workspace      = true
 
 [dependencies]
     ffi-support = {version = "0.4"}

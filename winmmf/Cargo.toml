@@ -1,16 +1,16 @@
 [package]
-    authors.workspace    = true
-    categories.workspace = true
-    description          = "A mostly safe Rust wrapper around Named Shared Memory on Windows. WIP"
-    edition.workspace    = true
-    homepage.workspace   = true
-    keywords.workspace   = true
-    license.workspace    = true
-    name                 = "winmmf"
-    readme               = "README.md"
-    repository.workspace = true
-    rust-version         = "1.82"
-    version.workspace    = true
+    authors.workspace      = true
+    categories.workspace   = true
+    description            = "A mostly safe Rust wrapper around Named Shared Memory on Windows. WIP"
+    edition.workspace      = true
+    homepage.workspace     = true
+    keywords.workspace     = true
+    license.workspace      = true
+    name                   = "winmmf"
+    readme                 = "README.md"
+    repository.workspace   = true
+    rust-version.workspace = true
+    version.workspace      = true
 
 [dependencies]
     fixedstr = {version = "0.5", features = ["std"]}
