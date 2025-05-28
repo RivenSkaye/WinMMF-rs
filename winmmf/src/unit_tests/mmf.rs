@@ -7,7 +7,7 @@ const TESTSTRING: &[u8; 56] = b"This is a testing string to ensure WinMMF Just W
 
 #[test]
 pub fn test_write() {
-    let file1 = MemoryMappedFile::<RWLock>::new(NonZeroUsize::new(64).unwrap(), "test_write", Namespace::LOCAL)
+    let file1 = MemoryMappedFile::<RWLock>::new(NonZeroUsize::new(252).unwrap(), "test_write", Namespace::LOCAL)
         .expect("creation failed");
     unsafe { SetLastError(WFoundation::WIN32_ERROR(0)) };
     file1.write(TESTSTRING.as_slice()).expect("Failed to write");

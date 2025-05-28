@@ -31,8 +31,14 @@ use std::{fmt, num::NonZeroUsize, ops::Deref};
 use windows::{
     core::PCSTR,
     Win32::{
-        Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE},
-        System::Memory::{CreateFileMappingA, MapViewOfFile, OpenFileMappingA, FILE_MAP_ALL_ACCESS, PAGE_READWRITE},
+        Foundation::{CloseHandle, GetLastError, SetLastError, INVALID_HANDLE_VALUE, WIN32_ERROR},
+        System::{
+            Memory::{
+                CreateFileMappingA, GetLargePageMinimum, MapViewOfFile, OpenFileMappingA, FILE_MAP_ALL_ACCESS,
+                FILE_MAP_LARGE_PAGES, PAGE_READWRITE, SEC_COMMIT, SEC_LARGE_PAGES,
+            },
+            SystemInformation::{GetSystemInfo, SYSTEM_INFO},
+        },
     },
 };
 #[cfg(feature = "impl_mmf")]
@@ -195,7 +201,33 @@ impl<LOCK: MMFLock> MemoryMappedFile<LOCK> {
     /// will make a part of the file inaccessible to other code trying to read it from a 32-bit process.
     /// The total size allocated will be 4 bytes larger than the specified size, but only after checking the input size
     /// is non-zero.
+    ///
+    /// As of version 5.0 this uses ***large pages*** whenever the requested size goes over the size of a normal page.
+    /// Due to [technical limitations](https://learn.microsoft.com/en-us/windows/win32/memory/creating-a-file-mapping-using-large-pages)
+    /// this will overcommit to the first exact multiple of the system's large page size.
+    ///
+    /// If the current user or process doesn't have the required permission for large pages, it will attempt to use
+    /// normal pages. This may, however, crash the process without warning. Windows is very much not a fan of
+    /// letting you ask for a large block of mapped memory.
+    ///
+    /// In most cases this means it'll 2MB or 4MB pages when you cross over your architecture's default page size. If
+    /// your architecture doesn't support large pages, it makes a best effort to get an exact multiple of your page
+    /// size. The exact numbers can be found [in this oldnewthing from 2021](https://devblogs.microsoft.com/oldnewthing/20210510-00/?p=105200)
     pub fn new(size: NonZeroUsize, name: impl Into<ztr64>, namespace: Namespace) -> MMFResult<Self> {
+        let mut use_lp = false;
+        let mut sysinfo = SYSTEM_INFO::default();
+        unsafe { GetSystemInfo(&mut sysinfo) };
+        let pagesize = sysinfo.dwPageSize as usize;
+        let alt_page_size = unsafe { GetLargePageMinimum() }.max(pagesize);
+        let mut use_size = if pagesize < (size.get() + 4) && pagesize < alt_page_size {
+            use_lp = true;
+            NonZeroUsize::new((size.get() + 4).next_multiple_of(alt_page_size))
+                .ok_or(MMFError::NotEnoughMemory)?
+                .get()
+        } else {
+            size.get() + 4
+        };
+
         // Build the name to use for the MMF
         let init_name = match namespace {
             Namespace::GLOBAL => GLOBAL_NAMESPACE,
@@ -205,16 +237,42 @@ impl<LOCK: MMFLock> MemoryMappedFile<LOCK> {
 
         // fuckin' windows
         let mmf_name = PCSTR::from_raw(init_name.to_ptr());
-        let (dw_low, dw_high) = (size.get() + 4).split();
+        let (dw_low, dw_high) = use_size.split();
 
         // Safety: handled through microSEH and we check the last error status later. Failure here is failure there.
-        let handle = try_seh(|| unsafe {
-            CreateFileMappingA(INVALID_HANDLE_VALUE, None, PAGE_READWRITE, dw_high, dw_low, mmf_name)
-        })??;
+        let handle = if let Ok(Ok(res)) = try_seh(|| unsafe {
+            CreateFileMappingA(
+                INVALID_HANDLE_VALUE,
+                None,
+                if use_lp { PAGE_READWRITE | SEC_LARGE_PAGES | SEC_COMMIT } else { PAGE_READWRITE },
+                dw_high,
+                dw_low,
+                mmf_name,
+            )
+        }) {
+            res
+        } else if use_lp {
+            unsafe { SetLastError(WIN32_ERROR(0)) };
+            use_lp = false;
+            use_size = (size.get() + 4).next_multiple_of(pagesize);
+            try_seh(|| unsafe {
+                CreateFileMappingA(INVALID_HANDLE_VALUE, None, PAGE_READWRITE, dw_high, dw_low, mmf_name)
+            })??
+        } else {
+            return Err(MMFError::NotEnoughMemory);
+        };
 
         // Unsafe because `MapViewOfFile` is marked as such, but it should return a NULL pointer when failing; and set
         // the last error state correspondingly.
-        let map_view = try_seh(|| unsafe { MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size.get() + 4) })?;
+        let map_view = try_seh(|| unsafe {
+            MapViewOfFile(
+                handle,
+                if use_lp { FILE_MAP_ALL_ACCESS | FILE_MAP_LARGE_PAGES } else { FILE_MAP_ALL_ACCESS },
+                0,
+                0,
+                use_size,
+            )
+        })?;
 
         // Explicit check to make sure we have something that works (later is now)
         if unsafe { GetLastError() }.is_err() {
@@ -222,7 +280,7 @@ impl<LOCK: MMFLock> MemoryMappedFile<LOCK> {
         }
 
         // Waste some time to ensure the memory is zeroed out - I learned the importance of this the hard way.
-        let zeroing = vec![0; size.get() + 4];
+        let zeroing = vec![0; use_size];
         // safety: we're writing zeroes into memory we just got back from the OS
         unsafe { std::ptr::copy(zeroing.as_ptr(), map_view.Value.cast(), zeroing.len()) };
 
@@ -234,7 +292,7 @@ impl<LOCK: MMFLock> MemoryMappedFile<LOCK> {
             name: init_name,
             size_high_order: dw_high,
             size_low_order: dw_low,
-            size: size.get(),
+            size: use_size - 4,
             map_view: Some(map_view.into()),
             lock,
             write_ptr,
@@ -249,6 +307,19 @@ impl<LOCK: MMFLock> MemoryMappedFile<LOCK> {
     /// I have no idea what happens if you call this on a fake name. Code responsibly.
     /// In all reality though, it should return an error that you can handle.
     pub fn open(size: NonZeroUsize, name: &str, namespace: Namespace, readonly: bool) -> MMFResult<Self> {
+        let mut use_lp = false;
+        let mut sysinfo = SYSTEM_INFO::default();
+        unsafe { GetSystemInfo(&mut sysinfo) };
+        let pagesize = sysinfo.dwPageSize as usize;
+        let alt_page_size = unsafe { GetLargePageMinimum() }.max(pagesize);
+        let mut use_size = if pagesize < (size.get() + 4) && pagesize < alt_page_size {
+            use_lp = true;
+            NonZeroUsize::new((size.get() + 4).next_multiple_of(alt_page_size))
+                .ok_or(MMFError::NotEnoughMemory)?
+                .get()
+        } else {
+            size.get() + 4
+        };
         // Build the name to use for the MMF
         let init_name = match namespace {
             Namespace::GLOBAL => ztr64::make(&format!("{GLOBAL_NAMESPACE}{name}")),
@@ -257,14 +328,37 @@ impl<LOCK: MMFLock> MemoryMappedFile<LOCK> {
         };
         // fuckin' windows
         let mmf_name = PCSTR::from_raw(init_name.to_ptr());
-        let (dw_low, dw_high) = (size.get() + 4).split();
+        let (dw_low, dw_high) = use_size.split();
 
         // Safety: Issues here are issues later, and we check for them later.
-        let handle = try_seh(|| unsafe { OpenFileMappingA(FILE_MAP_ALL_ACCESS.0, false, mmf_name) })??;
+        let handle = if let Ok(Ok(res)) = try_seh(|| unsafe {
+            OpenFileMappingA(
+                if use_lp { FILE_MAP_ALL_ACCESS.0 | SEC_LARGE_PAGES.0 | SEC_COMMIT.0 } else { FILE_MAP_ALL_ACCESS.0 },
+                false,
+                mmf_name,
+            )
+        }) {
+            res
+        } else if use_lp {
+            unsafe { SetLastError(WIN32_ERROR(0)) };
+            use_lp = false;
+            use_size = (size.get() + 4).next_multiple_of(pagesize);
+            try_seh(|| unsafe { OpenFileMappingA(FILE_MAP_ALL_ACCESS.0, false, mmf_name) })??
+        } else {
+            return Err(MMFError::NotEnoughMemory);
+        };
 
         // Unsafe because `MapViewOfFile` is marked as such, but it should return a NULL pointer when failing; and set
         // the last error state correspondingly.
-        let map_view = try_seh(|| unsafe { MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size.get() + 4) })?;
+        let map_view = try_seh(|| unsafe {
+            MapViewOfFile(
+                handle,
+                if use_lp { FILE_MAP_ALL_ACCESS | FILE_MAP_LARGE_PAGES } else { FILE_MAP_ALL_ACCESS },
+                0,
+                0,
+                use_size,
+            )
+        })?;
 
         // Explicit check to make sure we have something that works (later is now)
         if unsafe { GetLastError() }.is_err() {
@@ -279,7 +373,7 @@ impl<LOCK: MMFLock> MemoryMappedFile<LOCK> {
             name: init_name,
             size_high_order: dw_high,
             size_low_order: dw_low,
-            size: size.get(),
+            size: use_size - 4,
             lock,
             map_view: Some(map_view.into()),
             write_ptr,

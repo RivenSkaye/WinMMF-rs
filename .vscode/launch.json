@@ -1,0 +1,20 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in library 'winmmf'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "-p",
+                    "winmmf",
+                    "--lib"
+                ]
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}/winmmf"
+        }
+    ]
+}
